@@ -172,6 +172,10 @@ pub struct EngineOptions {
     pub toc: TocSettings,
     /// `--page-offset`。TOC・本文のページ番号の起点をずらす。
     pub page_offset: usize,
+    /// `--dump-outline`. When set, the list of headings, with their final page numbers,
+    /// is handed to this function (XML assembly and writing to a file live in the CLI
+    /// layer). It makes headings be collected independently of `--toc`.
+    pub outline: Option<OutlineSink>,
     /// CLIのヘッダー/フッター簡易オプションから合成した`@page`ルール。著者
     /// CSSのページルールより前に置かれるため、同じmargin boxを著者が
     /// 宣言していればそちらが勝つ。
@@ -410,6 +414,25 @@ impl std::fmt::Debug for TocSettings {
             .field("back_links", &self.back_links)
             .finish_non_exhaustive()
     }
+}
+
+/// A function that passes the collected headings to the `--dump-outline` output (the CLI
+/// layer (`cli::outline`) implements and supplies the XML assembly and writing).
+pub type OutlineSink = Rc<dyn Fn(&[OutlineHeading])>;
+
+/// A single heading of the outline (`--dump-outline`). A [`TocHeading`] augmented with the
+/// final 1-based physical page number that counts the cover and TOC. The number means the
+/// same as the one in `<item page="...">` emitted by wkhtmltopdf's `--dump-outline`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutlineHeading {
+    /// `h1`=1 … `h6`=6.
+    pub level: u8,
+    pub title: String,
+    /// 1-based physical page number. A running count from the start of the document (the
+    /// first cover page, if there is a cover), unaffected by `--page-offset`.
+    pub page: usize,
+    /// The named destination the link points to.
+    pub anchor: String,
 }
 
 /// 目次に載せる見出し1件。
@@ -1055,6 +1078,15 @@ impl<S: Sink> Engine<S> {
                  これを使う場合は --streaming を外してください",
             ));
         }
+        // The outline also needs the final page numbers of headings, so it has the same
+        // constraint as the table of contents.
+        if self.options.outline.is_some() {
+            return Err(EngineError::UnsupportedInStreamingMode(
+                "--dump-outline はストリーミングモードでは使えません\n  \
+                 (見出しの最終ページ番号が要るため)。\n  \
+                 これを使う場合は --streaming を外してください",
+            ));
+        }
         // 後方参照セレクタは常に非マッチになる。エラーにはしないが、黙って
         // 結果が変わるのは避けたいので警告する。
         let unsafe_selectors = streaming_unsafe_selectors(&author);
@@ -1546,9 +1578,11 @@ impl<S: Sink> Engine<S> {
             &image_cache,
         );
 
-        // 目次用の見出し収集。`id`が無い見出しには
-        // 自動で宛先名を振り、`anchor_names`へ足す。
-        let headings = if options.toc.enabled {
+        // Heading collection for the table of contents and outline. Headings without an
+        // `id` get an automatically assigned destination name added to `anchor_names`.
+        // Since `--dump-outline` needs headings independently of `--toc`, we collect them
+        // if either one is requested.
+        let headings = if options.toc.enabled || options.outline.is_some() {
             collect_headings(&dom, &pages, &mut anchor_names)
         } else {
             Vec::new()
@@ -1573,6 +1607,23 @@ impl<S: Sink> Engine<S> {
         } else {
             (Vec::new(), HashMap::new())
         };
+
+        // `--dump-outline`: hand off the headings tagged with their final 1-based physical
+        // page number, counting the cover and TOC. Since the body follows cover → TOC, we
+        // add the number of leading pages plus 1 to the 0-based within-body `body_page`.
+        if let Some(dump) = &options.outline {
+            let leading = cover_pages.len() + toc_pages.len();
+            let entries: Vec<OutlineHeading> = headings
+                .iter()
+                .map(|h| OutlineHeading {
+                    level: h.level,
+                    title: h.title.clone(),
+                    page: leading + h.body_page + 1,
+                    anchor: h.anchor.clone(),
+                })
+                .collect();
+            dump(&entries);
+        }
 
         // `counter(pages)`の総ページ数はcoverを除いた「TOC + 本文」。
         let total_pages = if rules_use_page_count(&page_rules) {
@@ -1834,6 +1885,59 @@ mod tests {
 
         let bytes = engine.finish().unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn dump_outline_reports_headings_with_final_page_numbers() {
+        // Push the second heading to page 2 with `break-before: always` and verify that
+        // the outline reports its final page number (1-based physical page).
+        let captured: Rc<std::cell::RefCell<Vec<OutlineHeading>>> =
+            Rc::new(std::cell::RefCell::new(Vec::new()));
+        let target = Rc::clone(&captured);
+
+        let options = EngineOptions {
+            fonts: vec![font_spec()],
+            outline: Some(Rc::new(move |headings: &[OutlineHeading]| {
+                *target.borrow_mut() = headings.to_vec();
+            })),
+            ..EngineOptions::default()
+        };
+        let mut engine = Engine::new(options, MemorySink::new());
+        engine
+            .feed(
+                b"<h1 id=\"a\">First</h1><p>intro</p>\
+                  <h2 id=\"b\" style=\"break-before: always\">Second</h2>",
+            )
+            .unwrap();
+        let bytes = engine.finish().unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+
+        let headings = captured.borrow();
+        assert_eq!(headings.len(), 2, "both headings should be reported");
+        assert_eq!(headings[0].level, 1);
+        assert_eq!(headings[0].title, "First");
+        assert_eq!(headings[0].page, 1, "first heading is on page 1");
+        assert!(!headings[0].anchor.is_empty());
+        assert_eq!(headings[1].level, 2);
+        assert_eq!(headings[1].title, "Second");
+        assert_eq!(headings[1].page, 2, "the forced break puts it on page 2");
+    }
+
+    #[test]
+    fn dump_outline_is_rejected_in_streaming_mode() {
+        // The final page numbers of headings cannot be determined in a single pass, so in
+        // streaming mode we reject it just like `--toc`.
+        let options = EngineOptions {
+            mode: Mode::Streaming,
+            fonts: vec![font_spec()],
+            outline: Some(Rc::new(|_: &[OutlineHeading]| {})),
+            ..EngineOptions::default()
+        };
+        let mut engine = Engine::new(options, MemorySink::new());
+        match engine.feed(b"<html><body><h1>x</h1></body></html>") {
+            Err(EngineError::UnsupportedInStreamingMode(_)) => {}
+            other => panic!("expected UnsupportedInStreamingMode, got {other:?}"),
+        }
     }
 
     #[test]

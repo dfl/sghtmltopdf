@@ -36,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `after_initialize` because the pipeline fills `config.assets.paths` in an initializer of
   its own, which runs after the one this gem adds.
 
+### Added
+
+- Support `--dump-outline <file>`, previously rejected as unsupported. It writes the
+  document's headings (`h1`–`h6`) and their final page numbers to a wkhtmltopdf-compatible
+  XML file (the `http://code.google.com/p/wkhtmltopdf/outline` namespace, nested `<item>`
+  elements with `title`, `page` and `link`). The page number is the 1-based physical page
+  counting any cover and table of contents, matching wkhtmltopdf. It reuses the same
+  heading collection as `--toc` but works independently of it, and like `--toc` it is not
+  available in streaming mode.
+
 ### Fixed
 
 - Read a `src` (or `url()`, or `href`) written as a filesystem path instead of joining it
