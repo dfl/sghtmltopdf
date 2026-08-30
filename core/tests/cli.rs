@@ -1532,3 +1532,38 @@ fn a_colour_emoji_font_is_refused_with_a_warning() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn dump_outline_writes_a_wkhtmltopdf_compatible_xml_file() {
+    let output = temp_output_path("dump-outline");
+    let outline = std::env::temp_dir().join(format!(
+        "sghtmltopdf-e2e-{}-dump-outline.xml",
+        std::process::id()
+    ));
+
+    let status = Command::new(BIN)
+        .arg(SAMPLE_HTML)
+        .arg("--font")
+        .arg(FONT_PATH)
+        .arg("-o")
+        .arg(&output)
+        .arg("--dump-outline")
+        .arg(&outline)
+        .status()
+        .expect("failed to run sghtmltopdf binary");
+    assert!(status.success(), "CLI should exit successfully");
+
+    let xml = std::fs::read_to_string(&outline).expect("outline XML should exist");
+    assert!(
+        xml.contains(r#"<outline xmlns="http://code.google.com/p/wkhtmltopdf/outline">"#),
+        "outline uses the wkhtmltopdf namespace: {xml}"
+    );
+    // sample.html の唯一の見出し(h1)が1ページ目の項目として載る。
+    assert!(
+        xml.contains(r#"<item title="Sample Report" page="1""#),
+        "the h1 heading should be reported on page 1: {xml}"
+    );
+
+    std::fs::remove_file(&output).ok();
+    std::fs::remove_file(&outline).ok();
+}

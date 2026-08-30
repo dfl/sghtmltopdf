@@ -89,6 +89,7 @@ const SERVER_ONLY_KEYS: &[&str] = &[
     "mono-font-index",
     "output",
     "cover",
+    "dump-outline",
     "header-html",
     "footer-html",
     "user-style-sheet",

@@ -61,14 +61,14 @@ sghtmltopdfは入力を1つのHTMLに限定し、表紙・目次は`--cover <pat
 
 ## Outline Options
 
-PDFのアウトライン(ブックマーク)自体が非対応のため、このセクションはすべて非対応です。
-文書内の目次は`--toc`で作れます。
+PDFのアウトライン(ブックマーク)埋め込みは非対応ですが、`--dump-outline`で見出し一覧を
+XMLに書き出せます。文書内の目次ページは`--toc`で作れます。
 
 | オプション | 方針 | 備考 |
 |---|---|---|
 | `--outline` / `--no-outline` | ❌ 非対応 | PDFブックマーク未実装 |
 | `--outline-depth <level>` | ❌ 非対応 | 同上 |
-| `--dump-outline <file>` | ❌ 非対応 | 同上 |
+| `--dump-outline <file>` | ✅ 対応 | 見出しと最終ページ番号をwkhtmltopdf互換のXMLで書き出す。`--toc`とは独立に使える |
 | `--dump-default-toc-xsl` | ❌ 非対応 | XSLTを使わない |
 
 ## Page Options
