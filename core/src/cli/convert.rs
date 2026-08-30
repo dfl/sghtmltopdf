@@ -1,18 +1,21 @@
 //! 変換サブコマンド(サブコマンド省略時の既定)の実行。
 
+use std::cell::RefCell;
 use std::io::{self, Read};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use clap::ArgMatches;
 
 use crate::engine::{
     Engine, EngineError, EngineOptions, FontSpec as EngineFontSpec, HeaderFooterHtml,
-    HeaderFooterPlaceholders, TocHeading, TocSettings,
+    HeaderFooterPlaceholders, OutlineHeading, OutlineSink, TocHeading, TocSettings,
 };
 use crate::sink::{FileSink, Sink, StdoutSink};
 
 use super::header_footer::PlaceholderValues;
 use super::options::{ConvertArgs, FontArg};
+use super::outline::build_outline_xml;
 use super::toc::{build_toc_html, TocEntry};
 use super::CliError;
 
@@ -157,6 +160,20 @@ fn render_from_reader<S: Sink<Error = io::Error>>(
         back_links,
     };
 
+    // `--dump-outline`: 見出し一覧のXMLを指定ファイルへ書き出す関数を組む。
+    // 書き出しはエンジンのページ確定後(コールバック内)に起きるため、失敗は
+    // 共有セルへ退避し、`engine.finish()`の後で拾ってエラーにする。
+    let outline_error: Rc<RefCell<Option<io::Error>>> = Rc::new(RefCell::new(None));
+    let outline_sink: Option<OutlineSink> = args.dump_outline.clone().map(|path| {
+        let error = Rc::clone(&outline_error);
+        Rc::new(move |headings: &[OutlineHeading]| {
+            let xml = build_outline_xml(headings);
+            if let Err(e) = std::fs::write(&path, xml) {
+                *error.borrow_mut() = Some(e);
+            }
+        }) as OutlineSink
+    });
+
     let header_footer_html = HeaderFooterHtml {
         header: read_optional_html(args.header_html.as_deref(), &placeholders)?,
         footer: read_optional_html(args.footer_html.as_deref(), &placeholders)?,
@@ -201,6 +218,7 @@ fn render_from_reader<S: Sink<Error = io::Error>>(
         cover_html,
         toc: toc_settings,
         page_offset: args.page_offset,
+        outline: outline_sink,
     };
 
     let mut engine = Engine::new(engine_options, sink);
@@ -227,7 +245,18 @@ fn render_from_reader<S: Sink<Error = io::Error>>(
         engine.feed(tail.as_bytes()).map_err(engine_error)?;
     }
 
-    engine.finish().map_err(engine_error)
+    let result = engine.finish().map_err(engine_error);
+
+    // `--dump-outline`の書き出しはコールバック内(finishの最中)で起きるため、
+    // ここで失敗を拾う。PDF自体は書けていても、要求されたXMLが書けなければ
+    // 失敗として扱う。
+    if let Some(e) = outline_error.borrow_mut().take() {
+        return Err(CliError::Input(format!(
+            "アウトラインの書き出しに失敗しました: {e}"
+        )));
+    }
+
+    result
 }
 
 /// `EngineError`をexit codeへ対応付ける。書き込み失敗・フォント読み込み失敗は

@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Paint `linear-gradient()` backgrounds as native PDF axial shadings. `background-image` and
+  the `background` shorthand now accept `linear-gradient(...)` (direction as an `<angle>` or a
+  single-side `to <side>` keyword; colour stops with optional percentage positions, distributed
+  the CSS way) and a comma-separated list of layers. Each gradient becomes a DeviceRGB axial
+  shading (`ShadingType 2`) with an exponential/stitching colour ramp, clipped to the
+  border-box. Colour stops resolve `currentcolor`. Not yet painted (the layer is skipped without
+  invalidating the declaration): `conic-gradient`, corner directions (`to top right`), and
+  gradients inside an `opacity < 1` subtree.
+
+- Paint `radial-gradient()` backgrounds and gradients with alpha colour stops. A `circle`/
+  `ellipse` shape and size keywords are parsed; the centre from `at <position>` is honoured and
+  the radius is drawn farthest-corner, becoming a radial shading (`ShadingType 3`). Colour stops
+  with alpha — including `transparent` and `rgba(...)` below full opacity — render through a
+  DeviceGray luminosity soft mask, so partially-transparent gradients show what is behind them.
+
+- Support `background-clip: text` (and the `-webkit-` alias) together with a `linear-gradient`
+  background, producing gradient-filled text. The element's glyphs are accumulated into the PDF
+  clip path (text rendering mode 7) across one text object, then the same axial shading used for
+  a gradient background is painted into that clip. Box-keyword values (`border-box` etc.) still
+  paint border-box-based. Not supported: `background-clip: text` with a non-gradient background,
+  or an element whose clipped content includes block descendants (only its own inline text is
+  clipped).
+
+- Support viewport-relative length units `vw`, `vh`, `vmin`, and `vmax`, previously rejected.
+  Print has no browser viewport, so they resolve against the page box: `vh` is 1% of the page
+  height, `vw` 1% of the width, `vmin`/`vmax` the shorter/longer side. This makes full-page
+  layouts written as `height: 100vh` work. The page box is document-global (a `@page`-resolved
+  size), set once before style computation; cover and table-of-contents documents use the same
+  page size.
+
+- Support `--dump-outline <file>`, previously rejected as unsupported. It writes the
+  document's headings (`h1`–`h6`) and their final page numbers to a wkhtmltopdf-compatible
+  XML file (the `http://code.google.com/p/wkhtmltopdf/outline` namespace, nested `<item>`
+  elements with `title`, `page` and `link`). The page number is the 1-based physical page
+  counting any cover and table of contents, matching wkhtmltopdf. It reuses the same
+  heading collection as `--toc` but works independently of it, and like `--toc` it is not
+  available in streaming mode.
+
 ## 0.4.0 - 2026-09-05
 
 ### Added
@@ -35,34 +77,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Sghtmltopdf.configure { |c| c.allow_path += ["…"] }`. The defaults are computed in
   `after_initialize` because the pipeline fills `config.assets.paths` in an initializer of
   its own, which runs after the one this gem adds.
-
-### Added
-
-- Support `background-clip: text` (and the `-webkit-` alias) together with a `linear-gradient`
-  background, producing gradient-filled text. The element's glyphs are accumulated into the PDF
-  clip path (text rendering mode 7) across one text object, then the same axial shading used for
-  a gradient background is painted into that clip. Box-keyword values (`border-box` etc.) still
-  paint border-box-based. Not supported: `background-clip: text` with a non-gradient background,
-  or an element whose clipped content includes block descendants (only its own inline text is
-  clipped).
-
-- Paint `linear-gradient()` backgrounds as native PDF axial shadings. `background-image` and
-  the `background` shorthand now accept `linear-gradient(...)` (direction as an `<angle>` or a
-  single-side `to <side>` keyword; opaque colour stops with optional percentage positions,
-  distributed the CSS way) and a comma-separated list of layers. Each gradient becomes a
-  DeviceRGB axial shading (`ShadingType 2`) with an exponential/stitching colour ramp, clipped
-  to the border-box. Colour stops resolve `currentcolor`. Not yet painted (the layer is skipped
-  without invalidating the declaration): `radial-gradient`/`conic-gradient`, corner directions
-  (`to top right`), and stops with alpha (`transparent`, `rgba(...)` with alpha < 1) — those
-  need a transparency soft mask. Gradients inside an `opacity < 1` subtree are also not yet
-  painted.
-
-- Support viewport-relative length units `vw`, `vh`, `vmin`, and `vmax`, previously rejected.
-  Print has no browser viewport, so they resolve against the page box: `vh` is 1% of the page
-  height, `vw` 1% of the width, `vmin`/`vmax` the shorter/longer side. This makes full-page
-  layouts written as `height: 100vh` work. The page box is document-global (a `@page`-resolved
-  size), set once before style computation; cover and table-of-contents documents use the same
-  page size.
 
 ### Fixed
 

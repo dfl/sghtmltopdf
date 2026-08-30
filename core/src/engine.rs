@@ -172,6 +172,10 @@ pub struct EngineOptions {
     pub toc: TocSettings,
     /// `--page-offset`。TOC・本文のページ番号の起点をずらす。
     pub page_offset: usize,
+    /// `--dump-outline`。設定すると、見出し一覧を最終ページ番号付きで
+    /// この関数へ渡す(XMLの組み立て・ファイルへの書き出しはCLI層が持つ)。
+    /// `--toc`と独立に見出しを収集させる。
+    pub outline: Option<OutlineSink>,
     /// CLIのヘッダー/フッター簡易オプションから合成した`@page`ルール。著者
     /// CSSのページルールより前に置かれるため、同じmargin boxを著者が
     /// 宣言していればそちらが勝つ。
@@ -410,6 +414,25 @@ impl std::fmt::Debug for TocSettings {
             .field("back_links", &self.back_links)
             .finish_non_exhaustive()
     }
+}
+
+/// 収集した見出しを`--dump-outline`の出力へ渡す関数(CLI層(`cli::outline`)が
+/// XMLの組み立て・書き出しを実装して渡す)。
+pub type OutlineSink = Rc<dyn Fn(&[OutlineHeading])>;
+
+/// アウトライン(`--dump-outline`)の見出し1件。[`TocHeading`]に、cover・TOCを
+/// 数えた最終的な1始まりの物理ページ番号を付けたもの。wkhtmltopdfの
+/// `--dump-outline`が吐く`<item page="...">`と同じ意味の番号。
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutlineHeading {
+    /// `h1`=1 … `h6`=6。
+    pub level: u8,
+    pub title: String,
+    /// 1始まりの物理ページ番号。文書の先頭(coverがあればその1枚目)から
+    /// 数えた通し番号で、`--page-offset`の影響は受けない。
+    pub page: usize,
+    /// リンク先の名前付き宛先。
+    pub anchor: String,
 }
 
 /// 目次に載せる見出し1件。
@@ -1058,6 +1081,14 @@ impl<S: Sink> Engine<S> {
                  これを使う場合は --streaming を外してください",
             ));
         }
+        // アウトラインも見出しの最終ページ番号が要るため、目次と同じ制約。
+        if self.options.outline.is_some() {
+            return Err(EngineError::UnsupportedInStreamingMode(
+                "--dump-outline はストリーミングモードでは使えません\n  \
+                 (見出しの最終ページ番号が要るため)。\n  \
+                 これを使う場合は --streaming を外してください",
+            ));
+        }
         // 後方参照セレクタは常に非マッチになる。エラーにはしないが、黙って
         // 結果が変わるのは避けたいので警告する。
         let unsafe_selectors = streaming_unsafe_selectors(&author);
@@ -1553,9 +1584,10 @@ impl<S: Sink> Engine<S> {
             &image_cache,
         );
 
-        // 目次用の見出し収集。`id`が無い見出しには
-        // 自動で宛先名を振り、`anchor_names`へ足す。
-        let headings = if options.toc.enabled {
+        // 目次・アウトライン用の見出し収集。`id`が無い見出しには
+        // 自動で宛先名を振り、`anchor_names`へ足す。`--dump-outline`は
+        // `--toc`と独立に見出しを必要とするため、どちらか一方でも収集する。
+        let headings = if options.toc.enabled || options.outline.is_some() {
             collect_headings(&dom, &pages, &mut anchor_names)
         } else {
             Vec::new()
@@ -1580,6 +1612,23 @@ impl<S: Sink> Engine<S> {
         } else {
             (Vec::new(), HashMap::new())
         };
+
+        // `--dump-outline`: 見出しへ、cover・TOCを数えた最終的な1始まりの
+        // 物理ページ番号を付けて渡す。本文は cover → TOC の後に続くため、
+        // 本文内0始まりの`body_page`に先行ページ数と1を足す。
+        if let Some(dump) = &options.outline {
+            let leading = cover_pages.len() + toc_pages.len();
+            let entries: Vec<OutlineHeading> = headings
+                .iter()
+                .map(|h| OutlineHeading {
+                    level: h.level,
+                    title: h.title.clone(),
+                    page: leading + h.body_page + 1,
+                    anchor: h.anchor.clone(),
+                })
+                .collect();
+            dump(&entries);
+        }
 
         // `counter(pages)`の総ページ数はcoverを除いた「TOC + 本文」。
         let total_pages = if rules_use_page_count(&page_rules) {
@@ -1841,6 +1890,60 @@ mod tests {
 
         let bytes = engine.finish().unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn dump_outline_reports_headings_with_final_page_numbers() {
+        // 2つ目の見出しを`break-before: always`で2ページ目へ送り、
+        // アウトラインがその最終ページ番号(1始まりの物理ページ)を
+        // 報告することを確かめる。
+        let captured: Rc<std::cell::RefCell<Vec<OutlineHeading>>> =
+            Rc::new(std::cell::RefCell::new(Vec::new()));
+        let target = Rc::clone(&captured);
+
+        let options = EngineOptions {
+            fonts: vec![font_spec()],
+            outline: Some(Rc::new(move |headings: &[OutlineHeading]| {
+                *target.borrow_mut() = headings.to_vec();
+            })),
+            ..EngineOptions::default()
+        };
+        let mut engine = Engine::new(options, MemorySink::new());
+        engine
+            .feed(
+                b"<h1 id=\"a\">First</h1><p>intro</p>\
+                  <h2 id=\"b\" style=\"break-before: always\">Second</h2>",
+            )
+            .unwrap();
+        let bytes = engine.finish().unwrap();
+        assert!(bytes.starts_with(b"%PDF-"));
+
+        let headings = captured.borrow();
+        assert_eq!(headings.len(), 2, "both headings should be reported");
+        assert_eq!(headings[0].level, 1);
+        assert_eq!(headings[0].title, "First");
+        assert_eq!(headings[0].page, 1, "first heading is on page 1");
+        assert!(!headings[0].anchor.is_empty());
+        assert_eq!(headings[1].level, 2);
+        assert_eq!(headings[1].title, "Second");
+        assert_eq!(headings[1].page, 2, "the forced break puts it on page 2");
+    }
+
+    #[test]
+    fn dump_outline_is_rejected_in_streaming_mode() {
+        // 見出しの最終ページ番号は1パスでは決まらないため、ストリーミング
+        // モードでは`--toc`と同じく拒否する。
+        let options = EngineOptions {
+            mode: Mode::Streaming,
+            fonts: vec![font_spec()],
+            outline: Some(Rc::new(|_: &[OutlineHeading]| {})),
+            ..EngineOptions::default()
+        };
+        let mut engine = Engine::new(options, MemorySink::new());
+        match engine.feed(b"<html><body><h1>x</h1></body></html>") {
+            Err(EngineError::UnsupportedInStreamingMode(_)) => {}
+            other => panic!("expected UnsupportedInStreamingMode, got {other:?}"),
+        }
     }
 
     #[test]

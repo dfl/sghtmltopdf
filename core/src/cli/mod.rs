@@ -6,6 +6,7 @@
 pub mod convert;
 pub mod header_footer;
 pub mod options;
+pub mod outline;
 /// HTTPサーバモード。`server` feature(既定ON)でのみ有効。
 #[cfg(feature = "server")]
 pub mod server;
