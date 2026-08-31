@@ -12,8 +12,9 @@ use super::values::{
     FlexDirection, FlexWrap, Float, FontStyle, FontWeight, GridArea, GridAutoFlow, GridLine,
     Hyphens, JustifyContent, ListStylePosition, ListStyleType, ObjectFit, Overflow, OverflowWrap,
     Position, QuotePair, RepeatCount, SpecifiedBackgroundPosition, SpecifiedBackgroundSize,
-    SpecifiedBoxShadow, SpecifiedCalc, SpecifiedCornerRadius, SpecifiedFlexBasis, SpecifiedLength,
-    SpecifiedLengthPercentage, SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight,
+    SpecifiedBoxShadow, SpecifiedCalc, SpecifiedColorStop, SpecifiedCornerRadius,
+    SpecifiedFlexBasis, SpecifiedLength, SpecifiedLengthPercentage,
+    SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight, SpecifiedLinearGradient,
     SpecifiedMaxSize, SpecifiedSpacing, SpecifiedTextShadow, SpecifiedTrackBreadth,
     SpecifiedTrackComponent, SpecifiedTrackList, SpecifiedTrackSize, SpecifiedTransformFunction,
     SpecifiedVerticalAlign, TableLayout, TextAlign, TextDecorationLine, TextOverflow,
@@ -67,6 +68,11 @@ pub enum PropertyDeclaration {
     /// `url(...)`(生の値、解決は呼び出し側任せ、`FontFaceSource::Url`と
     /// 同じ方針)。`None`は`none`(背景画像なし)を表す。
     BackgroundImage(Option<String>),
+    /// `background-image`/`background`の`linear-gradient()`層(手前→奥のCSS順)。
+    /// `radial-gradient`など未対応の層は含めない(パース側で読み飛ばす)。
+    /// `background-image`が指定された宣言では常に生成し、勾配が無ければ空にする
+    /// (同じプロパティの再指定で確実に上書きするため)。
+    BackgroundGradients(Vec<SpecifiedLinearGradient>),
     BackgroundPosition(SpecifiedBackgroundPosition),
     BackgroundSize(SpecifiedBackgroundSize),
     BackgroundRepeat(BackgroundRepeat),
@@ -258,7 +264,10 @@ pub fn parse_declaration<'i>(
         "font-style" => Ok(vec![D::FontStyle(parse_font_style(input)?)]),
         "color" => Ok(vec![D::Color(parse_color(input)?)]),
         "background-color" => Ok(vec![D::BackgroundColor(parse_color(input)?)]),
-        "background-image" => Ok(vec![D::BackgroundImage(parse_background_image(input)?)]),
+        "background-image" => {
+            let (url, gradients) = parse_background_image_value(input)?;
+            Ok(vec![D::BackgroundImage(url), D::BackgroundGradients(gradients)])
+        },
         "background-position" => {
             Ok(vec![D::BackgroundPosition(parse_background_position(input)?)])
         },
@@ -1894,8 +1903,132 @@ fn parse_quotes<'i>(
     Ok(Some(pairs))
 }
 
+/// `background-image`/`background`の1層。`linear-gradient()`と`url()`/`none`を
+/// 解釈し、`radial-gradient`など未対応の関数は中身を読み飛ばして
+/// `Unsupported`(=描画しない層)にする。複数背景のカンマ区切りリストの中で、
+/// 未対応の層があっても宣言全体を捨てずに、描ける層だけを残すための区分。
+enum BgLayer {
+    None,
+    Url(String),
+    Gradient(SpecifiedLinearGradient),
+    Unsupported,
+}
+
+/// カンマ区切りの背景画像リストを1層ずつ解釈する。`url`は最後の指定が勝ち、
+/// `linear-gradient`はCSS順(手前→奥)に集める。`none`/未対応の層は捨てる。
+fn parse_background_image_value<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<(Option<String>, Vec<SpecifiedLinearGradient>), ParseError<'i, ()>> {
+    let mut url = None;
+    let mut gradients = Vec::new();
+    for layer in input.parse_comma_separated(parse_background_image_layer)? {
+        match layer {
+            BgLayer::Url(u) => url = Some(u),
+            BgLayer::Gradient(g) => gradients.push(g),
+            BgLayer::None | BgLayer::Unsupported => {}
+        }
+    }
+    Ok((url, gradients))
+}
+
+/// 背景画像1層。`none` / `url()` / `linear-gradient()` / (読み飛ばす)関数。
+fn parse_background_image_layer<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<BgLayer, ParseError<'i, ()>> {
+    if input
+        .try_parse(|input| input.expect_ident_matching("none"))
+        .is_ok()
+    {
+        return Ok(BgLayer::None);
+    }
+    if let Ok(url) =
+        input.try_parse(|input| input.expect_url_or_string().map(|s| s.as_ref().to_string()))
+    {
+        return Ok(BgLayer::Url(url));
+    }
+    let name = match input.expect_function() {
+        Ok(name) => name.clone(),
+        Err(_) => return Err(input.new_custom_error(())),
+    };
+    input.parse_nested_block(|input| {
+        if name.eq_ignore_ascii_case("linear-gradient") {
+            if let Ok(gradient) = parse_linear_gradient_body(input) {
+                // 経由点の後に残りがあれば未対応の形。中身を読み飛ばして層ごと捨てる。
+                while input.next().is_ok() {}
+                return Ok(BgLayer::Gradient(gradient));
+            }
+        }
+        // `radial-gradient`/`conic-gradient`/`-webkit-*`や、対応外の
+        // `linear-gradient`(コーナー方向・length位置など)は読み飛ばす。
+        while input.next().is_ok() {}
+        Ok(BgLayer::Unsupported)
+    })
+}
+
+/// `linear-gradient(...)`の中身(関数の括弧内)を解釈する。方向(角度または
+/// `to <side>`)は省略可で、既定は`to bottom`(180度)。
+fn parse_linear_gradient_body<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<SpecifiedLinearGradient, ParseError<'i, ()>> {
+    let angle_deg = if let Ok(deg) = input.try_parse(parse_gradient_direction) {
+        input.expect_comma()?;
+        deg
+    } else {
+        180.0
+    };
+    let stops = parse_color_stop_list(input)?;
+    if stops.len() < 2 {
+        return Err(input.new_custom_error(()));
+    }
+    Ok(SpecifiedLinearGradient { angle_deg, stops })
+}
+
+/// 勾配の方向。`<angle>`、または`to <side>`(単一辺のみ。コーナーは非対応)。
+/// 角度はCSSの慣習(`0deg`=上向き、時計回り)で度で返す。
+fn parse_gradient_direction<'i>(input: &mut Parser<'i, '_>) -> Result<f32, ParseError<'i, ()>> {
+    if let Ok(radians) = input.try_parse(parse_angle_radians) {
+        return Ok(radians.to_degrees());
+    }
+    input.expect_ident_matching("to")?;
+    let side = input.expect_ident()?.clone();
+    let angle = match_ignore_ascii_case! { &side,
+        "top" => 0.0,
+        "right" => 90.0,
+        "bottom" => 180.0,
+        "left" => 270.0,
+        _ => return Err(input.new_custom_error(())),
+    };
+    // コーナー(`to top right`等)は要素寸法に依存するため非対応。2つ目の辺が
+    // 続くならエラーにして、層ごと読み飛ばさせる。
+    if input
+        .try_parse(|input| input.expect_ident().map(|_| ()))
+        .is_ok()
+    {
+        return Err(input.new_custom_error(()));
+    }
+    Ok(angle)
+}
+
+/// 色経由点のカンマ区切りリスト。各点は`<color> <percentage>?`。位置(0..1の
+/// 分数)は省略可で、省略時は描画側が前後から等間隔で補完する。
+fn parse_color_stop_list<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<Vec<SpecifiedColorStop>, ParseError<'i, ()>> {
+    let mut stops = Vec::new();
+    loop {
+        let color = parse_color(input)?;
+        let position = input.try_parse(|input| input.expect_percentage()).ok();
+        stops.push(SpecifiedColorStop { color, position });
+        if input.try_parse(|input| input.expect_comma()).is_err() {
+            break;
+        }
+    }
+    Ok(stops)
+}
+
 /// `background-image`の簡易実装。`url(...)`1つのみ受け付ける
-/// (`linear-gradient()`等の非`url()`値、複数背景のカンマ区切りは非対応)。
+/// (`list-style-image`用。`background-image`本体は
+/// [`parse_background_image_value`]でグラデーションとカンマ区切りにも対応する)。
 /// `none`は「背景画像なし」を表す`None`として扱う。
 fn parse_background_image<'i>(
     input: &mut Parser<'i, '_>,
@@ -2031,6 +2164,71 @@ fn parse_background_attachment<'i>(
     })
 }
 
+/// `background`ショートハンド1層分のスロット。カンマ区切りの各層をこの形に
+/// 読み、[`parse_background_shorthand`]がまとめる。
+#[derive(Default)]
+struct BgLayerSlots {
+    color: Option<Color>,
+    url: Option<String>,
+    gradient: Option<SpecifiedLinearGradient>,
+    position: Option<SpecifiedBackgroundPosition>,
+    size: Option<SpecifiedBackgroundSize>,
+    repeat: Option<BackgroundRepeat>,
+    attachment: Option<BackgroundAttachment>,
+}
+
+/// `background`ショートハンドの1層を、値の種類を`try_parse`で判定しながら読む
+/// (`border`ショートハンドと同じ方式)。画像スロットは`url()`/`linear-gradient()`
+/// /`none`/未対応関数のいずれも受け、未対応関数は読み飛ばして層を空にする。
+fn parse_background_layer_slots<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<BgLayerSlots, ParseError<'i, ()>> {
+    let mut slots = BgLayerSlots::default();
+    let mut image_seen = false;
+    loop {
+        if slots.position.is_none() {
+            if let Ok(p) = input.try_parse(parse_background_position) {
+                slots.position = Some(p);
+                if input.try_parse(|input| input.expect_delim('/')).is_ok() {
+                    slots.size = Some(parse_background_size(input)?);
+                }
+                continue;
+            }
+        }
+        if slots.repeat.is_none() {
+            if let Ok(r) = input.try_parse(parse_background_repeat) {
+                slots.repeat = Some(r);
+                continue;
+            }
+        }
+        if slots.attachment.is_none() {
+            if let Ok(a) = input.try_parse(parse_background_attachment) {
+                slots.attachment = Some(a);
+                continue;
+            }
+        }
+        if !image_seen {
+            if let Ok(layer) = input.try_parse(parse_background_image_layer) {
+                image_seen = true;
+                match layer {
+                    BgLayer::Url(u) => slots.url = Some(u),
+                    BgLayer::Gradient(g) => slots.gradient = Some(g),
+                    BgLayer::None | BgLayer::Unsupported => {}
+                }
+                continue;
+            }
+        }
+        if slots.color.is_none() {
+            if let Ok(c) = input.try_parse(parse_color) {
+                slots.color = Some(c);
+                continue;
+            }
+        }
+        break;
+    }
+    Ok(slots)
+}
+
 /// `background`ショートハンドの簡易実装。
 /// `color`/`image`/`repeat`/`attachment`/`position`(`/`区切りで直後に`size`)
 /// を任意の順序で受け付ける(`border`ショートハンドと同じ「ループでどの種類の
@@ -2041,48 +2239,36 @@ fn parse_background_shorthand<'i>(
     input: &mut Parser<'i, '_>,
 ) -> Result<Vec<PropertyDeclaration>, ParseError<'i, ()>> {
     use PropertyDeclaration as D;
+    // カンマ区切りの複数背景に対応する。各層を[`parse_background_layer_slots`]で
+    // 読み、`url`/color/positionは最後(先頭)の指定を採り、`linear-gradient`は
+    // CSS順(手前→奥)に集める。単一層(カンマ無し)の場合は従来どおり。
+    let layers = input.parse_comma_separated(parse_background_layer_slots)?;
+
     let mut color = None;
-    let mut image = None;
-    let mut repeat = None;
-    let mut attachment = None;
+    let mut url = None;
+    let mut gradients = Vec::new();
     let mut position = None;
     let mut size = None;
-
-    loop {
-        if position.is_none() {
-            if let Ok(p) = input.try_parse(parse_background_position) {
-                position = Some(p);
-                if input.try_parse(|input| input.expect_delim('/')).is_ok() {
-                    size = Some(parse_background_size(input)?);
-                }
-                continue;
-            }
+    let mut repeat = None;
+    let mut attachment = None;
+    for (i, layer) in layers.into_iter().enumerate() {
+        if let Some(c) = layer.color {
+            color = Some(c);
         }
-        if repeat.is_none() {
-            if let Ok(r) = input.try_parse(parse_background_repeat) {
-                repeat = Some(r);
-                continue;
-            }
+        if let Some(u) = layer.url {
+            url = Some(u);
         }
-        if attachment.is_none() {
-            if let Ok(a) = input.try_parse(parse_background_attachment) {
-                attachment = Some(a);
-                continue;
-            }
+        if let Some(g) = layer.gradient {
+            gradients.push(g);
         }
-        if image.is_none() {
-            if let Ok(img) = input.try_parse(parse_background_image) {
-                image = Some(img);
-                continue;
-            }
+        // position/size/repeat/attachmentは層ごとに持てるが、単純化のため
+        // 先頭層の指定だけを全体へ反映する(テンプレートの用法では十分)。
+        if i == 0 {
+            position = layer.position;
+            size = layer.size;
+            repeat = layer.repeat;
+            attachment = layer.attachment;
         }
-        if color.is_none() {
-            if let Ok(c) = input.try_parse(parse_color) {
-                color = Some(c);
-                continue;
-            }
-        }
-        break;
     }
 
     Ok(vec![
@@ -2092,7 +2278,8 @@ fn parse_background_shorthand<'i>(
             blue: 0,
             alpha: 0.0,
         })),
-        D::BackgroundImage(image.unwrap_or(None)),
+        D::BackgroundImage(url),
+        D::BackgroundGradients(gradients),
         D::BackgroundPosition(position.unwrap_or(SpecifiedBackgroundPosition {
             horizontal: SpecifiedLengthPercentage::Percentage(0.0),
             vertical: SpecifiedLengthPercentage::Percentage(0.0),

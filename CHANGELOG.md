@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Paint `linear-gradient()` backgrounds as native PDF axial shadings. `background-image` and
+  the `background` shorthand now accept `linear-gradient(...)` (direction as an `<angle>` or a
+  single-side `to <side>` keyword; opaque colour stops with optional percentage positions,
+  distributed the CSS way) and a comma-separated list of layers. Each gradient becomes a
+  DeviceRGB axial shading (`ShadingType 2`) with an exponential/stitching colour ramp, clipped
+  to the border-box. Colour stops resolve `currentcolor`. Not yet painted (the layer is skipped
+  without invalidating the declaration): `radial-gradient`/`conic-gradient`, corner directions
+  (`to top right`), and stops with alpha (`transparent`, `rgba(...)` with alpha < 1) — those
+  need a transparency soft mask. Gradients inside an `opacity < 1` subtree are also not yet
+  painted.
+
 ### Fixed
 
 - Stop rounding flex and grid item sizes to whole pixels (#15). taffy rounds its final

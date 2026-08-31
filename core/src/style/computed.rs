@@ -25,9 +25,9 @@ use super::values::{
     LengthPercentageOrAuto, ListStylePosition, ListStyleType, MaxSize, ObjectFit, Overflow,
     OverflowWrap, Position, QuotePair, SpecifiedCornerRadius, SpecifiedLength,
     SpecifiedLengthPercentage, SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight,
-    SpecifiedMaxSize, SpecifiedTrackSize, TableLayout, TextAlign, TextDecorationLine, TextOverflow,
-    TextTransform, TrackList, TrackSize, TransformFunction, VerticalAlign, Visibility, WhiteSpace,
-    WordBreak, ZIndex,
+    SpecifiedLinearGradient, SpecifiedMaxSize, SpecifiedTrackSize, TableLayout, TextAlign,
+    TextDecorationLine, TextOverflow, TextTransform, TrackList, TrackSize, TransformFunction,
+    VerticalAlign, Visibility, WhiteSpace, WordBreak, ZIndex,
 };
 
 /// `color`/`background-color`の計算値。パース時と異なり`currentcolor`は解決済み。
@@ -47,6 +47,22 @@ impl RgbaColor {
         blue: 0,
         alpha: 0.0,
     };
+}
+
+/// `linear-gradient()`の計算値。角度はCSSの慣習(`0deg`=上向き、時計回り)で
+/// 度のまま保持し、色経由点は`currentcolor`解決済み。位置の省略補完は描画側で
+/// 行う(層の座標は要素の寸法に依存するため計算スタイルには持たせない)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinearGradient {
+    pub angle_deg: f32,
+    pub stops: Vec<GradientStop>,
+}
+
+/// `linear-gradient()`の色経由点の計算値。位置は0..1の分数、省略時`None`。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientStop {
+    pub color: RgbaColor,
+    pub position: Option<f32>,
 }
 
 /// `line-height`の計算値。CSS2.1 §10.8.1: `<number>`/`<percentage>`の計算値は
@@ -117,6 +133,10 @@ pub struct ComputedStyle {
     pub background_color: RgbaColor,
     /// `url(...)`(生の値、解決は呼び出し側任せ)。非継承プロパティ、初期値`None`。
     pub background_image: Option<String>,
+    /// `background-image`の`linear-gradient()`層(手前→奥のCSS順)。非継承
+    /// プロパティ、初期値は空。`radial-gradient`など未対応の層はパース側で
+    /// 読み飛ばすためここには入らない。
+    pub background_gradients: Vec<LinearGradient>,
     /// 非継承プロパティ。
     pub background_position: BackgroundPosition,
     /// 非継承プロパティ。
@@ -426,6 +446,7 @@ impl Default for ComputedStyle {
                 alpha: 0.0,
             },
             background_image: None,
+            background_gradients: Vec::new(),
             background_position: BackgroundPosition::default(),
             background_size: BackgroundSize::default(),
             background_repeat: BackgroundRepeat::default(),
@@ -836,6 +857,7 @@ fn compute_element_style(
     let mut color = None;
     let mut background_color = None;
     let mut background_image = None;
+    let mut background_gradients_spec: Vec<SpecifiedLinearGradient> = Vec::new();
     let mut background_position = None;
     let mut background_size = None;
     let mut background_repeat = None;
@@ -975,6 +997,7 @@ fn compute_element_style(
             PropertyDeclaration::Color(v) => color = Some(*v),
             PropertyDeclaration::BackgroundColor(v) => background_color = Some(*v),
             PropertyDeclaration::BackgroundImage(v) => background_image = v.clone(),
+            PropertyDeclaration::BackgroundGradients(v) => background_gradients_spec = v.clone(),
             PropertyDeclaration::BackgroundPosition(v) => background_position = Some(*v),
             PropertyDeclaration::BackgroundSize(v) => background_size = Some(*v),
             PropertyDeclaration::BackgroundRepeat(v) => background_repeat = Some(*v),
@@ -1167,6 +1190,22 @@ fn compute_element_style(
         .unwrap_or(inherited_border_spacing_vertical);
 
     let resolved_color = resolve_color(color, inherited_color);
+    // 各色経由点の`currentcolor`を、この要素の計算済み`color`で解決する
+    // (`background-color`と同じ基準)。
+    let resolved_background_gradients: Vec<LinearGradient> = background_gradients_spec
+        .iter()
+        .map(|g| LinearGradient {
+            angle_deg: g.angle_deg,
+            stops: g
+                .stops
+                .iter()
+                .map(|s| GradientStop {
+                    color: resolve_color(Some(s.color), resolved_color),
+                    position: s.position,
+                })
+                .collect(),
+        })
+        .collect();
     let resolved_background_color = match background_color {
         Some(Color::Rgba {
             red,
@@ -1387,6 +1426,7 @@ fn compute_element_style(
         color: resolved_color,
         background_color: resolved_background_color,
         background_image: background_image.or(initial.background_image),
+        background_gradients: resolved_background_gradients,
         background_position: resolved_background_position,
         background_size: resolved_background_size,
         background_repeat: background_repeat.unwrap_or(initial.background_repeat),
