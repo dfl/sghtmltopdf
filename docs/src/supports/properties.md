@@ -114,7 +114,8 @@
 | `background-size` | ✅ | `cover`/`contain`/`<length-percentage> \| auto`の1〜2値 |
 | `background-repeat` | ⚠️ | `repeat`/`repeat-x`/`repeat-y`/`no-repeat`。CSS3の`round`/`space`、2値構文は非対応 |
 | `background-attachment` | ⚠️ | `scroll`/`fixed`(スクロールの概念が無いため`fixed`は`scroll`と同一視) |
-| `background-clip` / `background-origin` / `background-blend-mode` | ❌ | 未実装。背景はborder-box基準で描画する |
+| `background-clip` | ⚠️ | `text`のみ対応(`-webkit-background-clip`別名も可)。`linear-gradient`背景と併用すると、要素のテキストのグリフでクリップした「グラデーション文字」になる。`border-box`/`padding-box`/`content-box`はいずれもborder-box基準で描画。テキストにブロックの子孫を含む場合や、`background-clip: text`+背景色(グラデーション以外)は非対応 |
+| `background-origin` / `background-blend-mode` | ❌ | 未実装。背景はborder-box基準で描画する |
 
 `border-radius`と`background-image`を併用した場合、角丸によるクリップは行わない(角丸は背景色の塗りにのみ効く)。
 

@@ -9,13 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Render SVG images (`<img>` and CSS `background-image`), previously unsupported. SVGs are
-  rasterised with `resvg` (added with `default-features = false`, so no text/font stack) into
-  an RGBA pixmap and embedded through the existing image path, with the alpha channel becoming
-  the `/SMask`. An SVG smaller than its likely display size is supersampled first so it stays
-  crisp when scaled up. Detection is by content (`<svg`), since SVG has no binary magic bytes;
-  the raster formats are still tried first. Not rendered: `<text>` (the `text` feature is off,
-  so outline your text to paths), filters, and animation.
+- Support `background-clip: text` (and the `-webkit-` alias) together with a `linear-gradient`
+  background, producing gradient-filled text. The element's glyphs are accumulated into the PDF
+  clip path (text rendering mode 7) across one text object, then the same axial shading used for
+  a gradient background is painted into that clip. Box-keyword values (`border-box` etc.) still
+  paint border-box-based. Not supported: `background-clip: text` with a non-gradient background,
+  or an element whose clipped content includes block descendants (only its own inline text is
+  clipped).
+
+- Paint `linear-gradient()` backgrounds as native PDF axial shadings. `background-image` and
+  the `background` shorthand now accept `linear-gradient(...)` (direction as an `<angle>` or a
+  single-side `to <side>` keyword; opaque colour stops with optional percentage positions,
+  distributed the CSS way) and a comma-separated list of layers. Each gradient becomes a
+  DeviceRGB axial shading (`ShadingType 2`) with an exponential/stitching colour ramp, clipped
+  to the border-box. Colour stops resolve `currentcolor`. Not yet painted (the layer is skipped
+  without invalidating the declaration): `radial-gradient`/`conic-gradient`, corner directions
+  (`to top right`), and stops with alpha (`transparent`, `rgba(...)` with alpha < 1) — those
+  need a transparency soft mask. Gradients inside an `opacity < 1` subtree are also not yet
+  painted.
 
 ### Fixed
 

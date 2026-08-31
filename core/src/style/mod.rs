@@ -38,8 +38,9 @@ pub use stylesheet::{
 pub use ua::user_agent_stylesheet;
 pub use values::{
     compose_transform, set_viewport_px, AlignContent, AlignItems, AlignSelf, AspectRatio,
-    BackgroundAttachment, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse,
-    BorderStyle, BoxSizing, BreakBetween, BreakInside, CaptionSide, Clear, Color, ContentPart,
+    BackgroundAttachment, BackgroundClip, BackgroundPosition, BackgroundRepeat, BackgroundSize,
+    BorderCollapse, BorderStyle, BoxSizing, BreakBetween, BreakInside, CaptionSide, Clear, Color,
+    ContentPart,
     CornerRadius, Display, EmphasisPosition, EmphasisShape, EmphasisStyle, EmptyCells, FlexBasis,
     FlexDirection, FlexWrap, Float, FontStyle, FontWeight, GridArea, GridAutoFlow, GridLine,
     Hyphens, JustifyContent, Length, LengthPercentage, LengthPercentageOrAuto, ListStylePosition,
