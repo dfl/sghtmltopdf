@@ -984,6 +984,24 @@ pub enum Color {
     },
 }
 
+/// `linear-gradient()`の指定値。角度はCSSの慣習(`0deg`=上向き、時計回りに
+/// 増加)で度のまま保持する。色は`currentcolor`未解決のまま(解決は計算
+/// スタイルの役割)。`radial-gradient`など未対応の層はここには入らない
+/// (パース側で読み飛ばす)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpecifiedLinearGradient {
+    pub angle_deg: f32,
+    pub stops: Vec<SpecifiedColorStop>,
+}
+
+/// `linear-gradient()`の色経由点1つ。位置は省略可(`None`はパース後に
+/// 前後の点から等間隔で補完する)。位置は0..1の分数(パーセンテージ)。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpecifiedColorStop {
+    pub color: Color,
+    pub position: Option<f32>,
+}
+
 /// `object-fit`。`<img>`(置換要素)専用、非継承プロパティ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ObjectFit {

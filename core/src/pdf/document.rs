@@ -44,7 +44,9 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use pdf_writer::types::{ActionType, AnnotationType, LineCapStyle, TextRenderingMode};
-use pdf_writer::{Content, Finish, Name, Pdf, Rect as PdfRect, Ref, TextStr};
+use pdf_writer::{Chunk, Content, Finish, Name, Pdf, Rect as PdfRect, Ref, TextStr};
+
+use super::gradient;
 
 use crate::fonts::{Font, FontCollection};
 use crate::html::NodeId;
@@ -259,6 +261,18 @@ pub fn encode_pdf_with_options(
             page_image_refs.push(ids.root);
         }
 
+        // `linear-gradient()`背景のシェーディングオブジェクトを払い出して書く
+        // (画像と同じく「このページで使う分だけ」)。
+        let mut gradient_boxes = Vec::new();
+        for b in &page.boxes {
+            collect_gradient_boxes(b, styles, settings, &mut gradient_boxes);
+        }
+        let (gradient_shadings, gradient_objects) =
+            write_gradient_shadings(&gradient_boxes, &mut alloc);
+        for (_id, chunk) in &gradient_objects {
+            pdf.extend(chunk);
+        }
+
         // `opacity < 1`の要素を先に集めてRefを払い出す(画像・フォントと同じ
         // 構造)。実際のForm XObject化(サブツリーの描画・埋め込み)は
         // `render_box`の中で行われ、その結果は`pending_forms`に積まれる。
@@ -337,6 +351,7 @@ pub fn encode_pdf_with_options(
             &form_refs,
             &alpha_gs_names,
             &alpha_gs_ids,
+            &gradient_shadings,
         );
         p.finish();
 
@@ -372,6 +387,8 @@ pub fn encode_pdf_with_options(
                 &form_refs,
                 &alpha_gs_names,
                 &alpha_gs_ids,
+                // opacityで包んだサブツリー内の勾配は現状未対応(空)。
+                &[],
             );
         }
     }
@@ -599,6 +616,7 @@ pub(super) fn write_resources(
     form_refs: &[Ref],
     alpha_gs_names: &[String],
     alpha_gs_ids: &[Ref],
+    gradient_shadings: &[(String, Ref)],
 ) {
     let mut font_dict = resources.fonts();
     for (name, ids) in font_resource_names.iter().zip(font_ids.iter()) {
@@ -616,6 +634,14 @@ pub(super) fn write_resources(
     let mut ext_g_state_dict = resources.ext_g_states();
     for (name, &id) in alpha_gs_names.iter().zip(alpha_gs_ids.iter()) {
         ext_g_state_dict.pair(Name(name.as_bytes()), id);
+    }
+    ext_g_state_dict.finish();
+    if !gradient_shadings.is_empty() {
+        let mut shading_dict = resources.shadings();
+        for (name, id) in gradient_shadings {
+            shading_dict.pair(Name(name.as_bytes()), *id);
+        }
+        shading_dict.finish();
     }
 }
 
@@ -786,6 +812,80 @@ pub(super) fn collect_image_uses(
         }
         LaidOutContent::Image(None) => {}
     }
+}
+
+/// ページ内で`linear-gradient()`背景を持つboxを集める。各要素につき、その
+/// `NodeId`と、border-boxに合わせた描画準備済みの層を返す(`background-image`の
+/// 画像収集[`collect_image_uses`]と同じ木の辿り方)。呼び出し側が層ごとに
+/// シェーディングオブジェクトを払い出して書き、リソースへ登録する。
+pub(super) fn collect_gradient_boxes(
+    b: &LaidOutBox,
+    styles: &HashMap<NodeId, Rc<ComputedStyle>>,
+    settings: &PageSettings,
+    out: &mut Vec<(usize, Vec<gradient::GradientLayer>)>,
+) {
+    if let Some(node) = b.node {
+        if let Some(style) = styles.get(&node) {
+            if !style.background_gradients.is_empty() {
+                let layers = gradient::layers_for(style, b.layout.border_box(), settings);
+                if !layers.is_empty() {
+                    out.push((node.0, layers));
+                }
+            }
+        }
+    }
+
+    match &b.content {
+        LaidOutContent::Blocks(children) | LaidOutContent::Flex(children) => {
+            for child in children {
+                collect_gradient_boxes(child, styles, settings, out);
+            }
+        }
+        LaidOutContent::Grid(grid) => {
+            for child in grid.rows.iter().flat_map(|row| &row.items) {
+                collect_gradient_boxes(child, styles, settings, out);
+            }
+        }
+        LaidOutContent::Table(table) => {
+            if let Some(caption) = &table.caption {
+                collect_gradient_boxes(caption, styles, settings, out);
+            }
+            for row in &table.rows {
+                for cell in &row.cells {
+                    collect_gradient_boxes(cell, styles, settings, out);
+                }
+            }
+        }
+        LaidOutContent::Inline(lines) => {
+            for line in lines {
+                for atomic in &line.atomics {
+                    collect_gradient_boxes(&atomic.content, styles, settings, out);
+                }
+            }
+        }
+        LaidOutContent::Image(_) => {}
+    }
+}
+
+/// 集めた勾配層のシェーディング/関数オブジェクトを書き出し、リソース登録用の
+/// `(名前, シェーディングRef)`の列を返す。各オブジェクトは独立`Chunk`なので、
+/// `write` は呼び出し側が渡す(バッチは`pdf.extend`、ストリーミングは
+/// `write_chunk`)。名前は[`gradient::shading_name`]で収集側・描画側が一致する。
+#[allow(clippy::type_complexity)]
+pub(super) fn write_gradient_shadings(
+    gradient_boxes: &[(usize, Vec<gradient::GradientLayer>)],
+    alloc: &mut RefAllocator,
+) -> (Vec<(String, Ref)>, Vec<(Ref, Chunk)>) {
+    let mut shadings = Vec::new();
+    let mut objects = Vec::new();
+    for (node_index, layers) in gradient_boxes {
+        for (i, layer) in layers.iter().enumerate() {
+            let (shading_ref, objs) = gradient::write_layer_objects(layer, &mut || alloc.next());
+            objects.extend(objs);
+            shadings.push((gradient::shading_name(*node_index, i), shading_ref));
+        }
+    }
+    (shadings, objects)
 }
 
 /// リンク注釈の生成に必要な文書単位の設定。
@@ -1400,6 +1500,7 @@ fn render_box_with_style_inner(
         settings,
         background_image_paint,
         alpha_gs_names,
+        b.node,
     );
     render_outline(content, &b.layout, style, settings);
 
@@ -1836,6 +1937,7 @@ fn render_box_decoration(
     settings: &PageSettings,
     background_image_paint: Option<BackgroundImagePaint>,
     alpha_gs_names: &[String],
+    node: Option<NodeId>,
 ) {
     let radii = effective_radii(layout, style);
     let has_radius = [radii.0, radii.1, radii.2, radii.3]
@@ -1853,6 +1955,7 @@ fn render_box_decoration(
             radii,
             background_image_paint,
             alpha_gs_names,
+            node,
         );
         return;
     }
@@ -1866,10 +1969,41 @@ fn render_box_decoration(
             alpha_gs_names,
         );
     }
+    render_background_gradients(content, layout.border_box(), style, settings, node);
     if let Some(paint) = background_image_paint {
         render_background_image(content, layout.border_box(), style, settings, &paint);
     }
     render_border(content, layout, style, settings);
+}
+
+/// `linear-gradient()`背景の各層を、border-boxへクリップした軸シェーディング
+/// として描く。層のシェーディングオブジェクトとリソース登録は収集側
+/// ([`collect_gradient_boxes`])が済ませており、ここは同じ`NodeId`+層番号から
+/// 導いたリソース名で`sh`を出すだけ。手前の層(CSS順で先)が上に来るよう
+/// 逆順に描く。背景色の上・`background-image`/枠線の下。
+fn render_background_gradients(
+    content: &mut RenderTarget<'_>,
+    border_box: Rect,
+    style: &ComputedStyle,
+    settings: &PageSettings,
+    node: Option<NodeId>,
+) {
+    let Some(node) = node else { return };
+    if style.background_gradients.is_empty() {
+        return;
+    }
+    let layer_count = gradient::layers_for(style, border_box, settings).len();
+    let x = settings.margin.left + border_box.x;
+    let y = to_pdf_y(settings, border_box.y + border_box.height);
+    for i in (0..layer_count).rev() {
+        let name = gradient::shading_name(node.0, i);
+        content.save_state();
+        content.rect(x, y, border_box.width, border_box.height);
+        content.clip_nonzero();
+        content.end_path();
+        content.shading(Name(name.as_bytes()));
+        content.restore_state();
+    }
 }
 
 /// ぼかし近似の段階数。
@@ -2426,6 +2560,7 @@ fn render_rounded_decoration(
     ),
     background_image_paint: Option<BackgroundImagePaint>,
     alpha_gs_names: &[String],
+    node: Option<NodeId>,
 ) {
     let border_box = layout.border_box();
     let x0 = settings.margin.left + border_box.x;
@@ -2451,7 +2586,8 @@ fn render_rounded_decoration(
         }
     }
     // 角丸パスへのクリップは行わず、常に直線の矩形として描画する
-    // (border-radiusとの組み合わせは非対応)。
+    // (border-radiusとの組み合わせは非対応)。勾配も同じく直線矩形へクリップ。
+    render_background_gradients(content, border_box, style, settings, node);
     if let Some(paint) = background_image_paint {
         render_background_image(content, border_box, style, settings, &paint);
     }
