@@ -9,12 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Support viewport-relative length units `vw`, `vh`, `vmin`, and `vmax`, previously rejected.
-  Print has no browser viewport, so they resolve against the page box: `vh` is 1% of the page
-  height, `vw` 1% of the width, `vmin`/`vmax` the shorter/longer side. This makes full-page
-  layouts written as `height: 100vh` work. The page box is document-global (a `@page`-resolved
-  size), set once before style computation; cover and table-of-contents documents use the same
-  page size.
+- Render SVG images (`<img>` and CSS `background-image`), previously unsupported. SVGs are
+  rasterised with `resvg` (added with `default-features = false`, so no text/font stack) into
+  an RGBA pixmap and embedded through the existing image path, with the alpha channel becoming
+  the `/SMask`. An SVG smaller than its likely display size is supersampled first so it stays
+  crisp when scaled up. Detection is by content (`<svg`), since SVG has no binary magic bytes;
+  the raster formats are still tried first. Not rendered: `<text>` (the `text` feature is off,
+  so outline your text to paths), filters, and animation.
 
 ### Fixed
 

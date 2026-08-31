@@ -90,8 +90,8 @@ const REASONS: &[Reason] = &[
         options: &["--enable-forms", "--disable-forms"],
     },
     Reason {
-        message: "SVGを描画できないため、チェックボックス等の画像差し替えには\n  \
-                  対応していません(内蔵の描画が使われます)",
+        message: "フォーム部品(チェックボックス等)の画像差し替えには対応していません\n  \
+                  (フォーム自体が非対応。内蔵の描画が使われます)",
         options: &[
             "--checkbox-svg",
             "--checkbox-checked-svg",
