@@ -971,6 +971,17 @@ pub enum BackgroundAttachment {
     Fixed,
 }
 
+/// `background-clip`. Only `text` is special-cased; `border-box`/`padding-box`/
+/// `content-box` all collapse to the default (border-box-based drawing). `text`
+/// clips the background to the element's text glyphs (only has an effect when
+/// combined with a `linear-gradient`, producing gradient text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackgroundClip {
+    #[default]
+    BorderBox,
+    Text,
+}
+
 /// 色。`currentcolor`の解決や継承は計算スタイルの役割なので、
 /// ここではパース結果をそのまま保持する。
 #[derive(Debug, Clone, Copy, PartialEq)]
