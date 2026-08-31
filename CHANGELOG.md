@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Support viewport-relative length units `vw`, `vh`, `vmin`, and `vmax`, previously rejected.
+  Print has no browser viewport, so they resolve against the page box: `vh` is 1% of the page
+  height, `vw` 1% of the width, `vmin`/`vmax` the shorter/longer side. This makes full-page
+  layouts written as `height: 100vh` work. The page box is document-global (a `@page`-resolved
+  size), set once before style computation; cover and table-of-contents documents use the same
+  page size.
+
 ### Fixed
 
 - Stop rounding flex and grid item sizes to whole pixels (#15). taffy rounds its final
