@@ -261,3 +261,34 @@ fn a_gradient_with_a_transparent_stop_is_not_painted() {
         "a gradient with an alpha stop should be skipped for now"
     );
 }
+
+#[test]
+fn background_clip_text_fills_glyphs_with_the_gradient() {
+    // グラデーション文字: テキストをクリップ(Tr 7)に積み、`sh`で軸シェーディングを
+    // グリフへ流し込む。矩形の背景塗り(fill)ではなくクリップ塗りになる。
+    let css = r#"body { margin: 0; }
+       h1 { font-size: 40px;
+            background: linear-gradient(90deg, #ff0000, #0000ff);
+            -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent; color: transparent; }"#;
+    let bytes = build_pdf(r#"<h1>GOLD</h1>"#, css);
+
+    // 軸シェーディングは背景勾配と同じく書かれている。
+    assert!(
+        count_occurrences(&bytes, b"/ShadingType 2") > 0,
+        "the gradient still emits an axial shading"
+    );
+
+    let content = decompressed_stream_bytes(&bytes);
+    // テキストをクリップモード(7 Tr)で積む。
+    assert!(
+        count_occurrences(&content, b"7 Tr") > 0,
+        "glyphs should be added to the clip path (text rendering mode 7): {}",
+        String::from_utf8_lossy(&content)
+    );
+    // クリップへシェーディングを流し込む(名前付きシェーディング + sh)。
+    assert!(
+        count_occurrences(&content, b"/Gsh") > 0 && count_occurrences(&content, b" sh") > 0,
+        "the gradient shading should be painted into the text clip"
+    );
+}

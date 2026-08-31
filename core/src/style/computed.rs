@@ -17,13 +17,13 @@ use super::properties::PropertyDeclaration;
 use super::selector_impl::PseudoElement;
 use super::stylesheet::{parse_inline_style, Stylesheet};
 use super::values::{
-    AlignContent, AlignItems, AlignSelf, AspectRatio, BackgroundAttachment, BackgroundPosition,
-    BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxSizing, BreakBetween,
-    BreakInside, CaptionSide, Clear, Color, ContentPart, CornerRadius, Display, EmphasisPosition,
-    EmphasisStyle, EmptyCells, FlexBasis, FlexDirection, FlexWrap, Float, FontStyle, FontWeight,
-    GridArea, GridAutoFlow, GridLine, Hyphens, JustifyContent, Length, LengthPercentage,
-    LengthPercentageOrAuto, ListStylePosition, ListStyleType, MaxSize, ObjectFit, Overflow,
-    OverflowWrap, Position, QuotePair, SpecifiedCornerRadius, SpecifiedLength,
+    AlignContent, AlignItems, AlignSelf, AspectRatio, BackgroundAttachment, BackgroundClip,
+    BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxSizing,
+    BreakBetween, BreakInside, CaptionSide, Clear, Color, ContentPart, CornerRadius, Display,
+    EmphasisPosition, EmphasisStyle, EmptyCells, FlexBasis, FlexDirection, FlexWrap, Float,
+    FontStyle, FontWeight, GridArea, GridAutoFlow, GridLine, Hyphens, JustifyContent, Length,
+    LengthPercentage, LengthPercentageOrAuto, ListStylePosition, ListStyleType, MaxSize, ObjectFit,
+    Overflow, OverflowWrap, Position, QuotePair, SpecifiedCornerRadius, SpecifiedLength,
     SpecifiedLengthPercentage, SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight,
     SpecifiedLinearGradient, SpecifiedMaxSize, SpecifiedTrackSize, TableLayout, TextAlign,
     TextDecorationLine, TextOverflow, TextTransform, TrackList, TrackSize, TransformFunction,
@@ -145,6 +145,9 @@ pub struct ComputedStyle {
     pub background_repeat: BackgroundRepeat,
     /// 非継承プロパティ。`fixed`は`scroll`と同一視して描画する。
     pub background_attachment: BackgroundAttachment,
+    /// 非継承プロパティ。`text`で背景をテキストのグリフでクリップする
+    /// (`linear-gradient`と併用したときのみ効果がある)。
+    pub background_clip: BackgroundClip,
     /// `text-decoration-line`。仕様上は非継承プロパティだが、代わりに祖先の
     /// 装飾線が子孫のボックスへ「伝播」する特殊規則を持つ。この伝播を
     /// 別途実装する代わりに、継承プロパティとして扱うことで
@@ -451,6 +454,7 @@ impl Default for ComputedStyle {
             background_size: BackgroundSize::default(),
             background_repeat: BackgroundRepeat::default(),
             background_attachment: BackgroundAttachment::default(),
+            background_clip: BackgroundClip::default(),
             text_decoration_line: TextDecorationLine::default(),
             pseudo_before_content: None,
             pseudo_after_content: None,
@@ -862,6 +866,7 @@ fn compute_element_style(
     let mut background_size = None;
     let mut background_repeat = None;
     let mut background_attachment = None;
+    let mut background_clip = None;
     let mut text_decoration_line = None;
     let mut break_before = None;
     let mut break_after = None;
@@ -1002,6 +1007,7 @@ fn compute_element_style(
             PropertyDeclaration::BackgroundSize(v) => background_size = Some(*v),
             PropertyDeclaration::BackgroundRepeat(v) => background_repeat = Some(*v),
             PropertyDeclaration::BackgroundAttachment(v) => background_attachment = Some(*v),
+            PropertyDeclaration::BackgroundClip(v) => background_clip = Some(*v),
             PropertyDeclaration::TextDecorationLine(v) => text_decoration_line = Some(*v),
             // `content`は`::before`/`::after`専用で、通常の要素では効果を持たない
             // (`matching_pseudo_content`が別途、擬似要素向けのマッチングを行う)。
@@ -1431,6 +1437,7 @@ fn compute_element_style(
         background_size: resolved_background_size,
         background_repeat: background_repeat.unwrap_or(initial.background_repeat),
         background_attachment: background_attachment.unwrap_or(initial.background_attachment),
+        background_clip: background_clip.unwrap_or(initial.background_clip),
         text_decoration_line: text_decoration_line.unwrap_or(inherited_text_decoration_line),
         pseudo_before_content,
         // 子孫の処理後に`compute_recursive`が解決してこのフィールドを埋める
