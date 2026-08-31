@@ -30,7 +30,7 @@
 
 | プロパティ | 対応 | 備考 |
 | - | - | - |
-| `width` / `height` | ⚠️ | `auto`/`<length>`/`<percentage>`/`calc()`。`min-content`/`max-content`/`fit-content`は非対応。`height`のパーセンテージはcontaining block高さ不定として無視される |
+| `width` / `height` | ⚠️ | `auto`/`<length>`/`<percentage>`/`calc()`。長さの単位は`px`/`em`/`rem`/絶対単位に加えビューポート単位(`vw`/`vh`/`vmin`/`vmax`、印刷ではページboxが基準)も可。`min-content`/`max-content`/`fit-content`は非対応。`height`のパーセンテージはcontaining block高さ不定として無視される |
 | `min-width` / `min-height` | ⚠️ | `<length>`/`<percentage>`/`calc()`(初期値`0`)。`auto`/`min-content`等のキーワードは非対応。`min-height`のパーセンテージは無視される |
 | `max-width` / `max-height` | ⚠️ | `none`/`<length>`/`<percentage>`/`calc()`(初期値`none`)。`min > max`のときは`min`が勝つ(仕様通り)。`max-height`のパーセンテージは無視される |
 | `aspect-ratio` | ⚠️ | `auto \| <ratio> \| auto <ratio>`。「幅確定→高さ導出」が基本で、「高さ確定→幅導出」はfloat/`inline-block`/絶対配置/`<img>`のshrink-to-fit文脈のみ(通常フローのブロックの`width: auto`はstretch優先、仕様通り)。`min-*`/`max-*`でクランプされて比が崩れた場合の再計算は行わない |

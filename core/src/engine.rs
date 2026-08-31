@@ -46,8 +46,8 @@ use crate::sink::Sink;
 use crate::style::{
     compute_single_element_style, compute_styles, compute_styles_with_parent,
     extract_author_stylesheet, needs_preceding_siblings, resolve_page_rules, rules_use_page_count,
-    streaming_unsafe_selectors, user_agent_stylesheet, ComputedStyle, LengthPercentageOrAuto,
-    PageRule, RgbaColor, Stylesheet,
+    set_viewport_px, streaming_unsafe_selectors, user_agent_stylesheet, ComputedStyle,
+    LengthPercentageOrAuto, PageRule, RgbaColor, Stylesheet,
 };
 use crate::style::{FontStyle, FontWeight};
 
@@ -1032,6 +1032,9 @@ impl<S: Sink> Engine<S> {
         };
         let page_rules = page_rules_with_cli(&self.options.extra_page_rules, &author.page_rules);
         let page_settings = apply_page_rule_settings_override(self.options.settings, &page_rules);
+        // Viewport units (vw/vh) resolve against the page box. Set it before the
+        // subsequent style computation (compute_styles_with_parent).
+        set_viewport_px(page_settings.size.width, page_settings.size.height);
         if rules_use_page_count(&page_rules) {
             return Err(EngineError::UnsupportedInStreamingMode(
                 "@pageのマージンボックスの counter(pages) はストリーミングモードでは使えません\n  \
@@ -1472,6 +1475,13 @@ impl<S: Sink> Engine<S> {
             );
         let css_cache = DocumentImageCache::new();
         let author = extract_author_stylesheet(&dom, &css_fetcher, &css_cache);
+        // Viewport units (vw/vh/vmin/vmax) resolve against the page box, so
+        // determine and set the final page size before style computation. Independent
+        // documents with the same page size, such as the cover and table of contents,
+        // are also processed on the same thread.
+        let page_rules = page_rules_with_cli(&options.extra_page_rules, &author.page_rules);
+        let page_settings = apply_page_rule_settings_override(options.settings, &page_rules);
+        set_viewport_px(page_settings.size.width, page_settings.size.height);
         let mut styles = compute_styles(&dom, &ua, &author);
         apply_content_options(&mut styles, &options.content);
         // `<a href="#id">`の宛先候補。
@@ -1479,8 +1489,6 @@ impl<S: Sink> Engine<S> {
             .into_iter()
             .map(|(node, id)| (node, anchor_destination_name(&id)))
             .collect();
-        let page_rules = page_rules_with_cli(&options.extra_page_rules, &author.page_rules);
-        let page_settings = apply_page_rule_settings_override(options.settings, &page_rules);
 
         register_generic_fonts(&mut fonts, &options.generic_fonts)?;
         for loaded in load_font_faces(&author.font_faces, &css_fetcher, &system_fonts) {

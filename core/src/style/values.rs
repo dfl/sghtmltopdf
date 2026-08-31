@@ -622,6 +622,49 @@ pub enum SpecifiedLength {
     Px(f32),
     Em(f32),
     Rem(f32),
+    /// `vw`. 1% of the viewport (the page box itself in print) width.
+    Vw(f32),
+    /// `vh`. 1% of the viewport height.
+    Vh(f32),
+    /// `vmin`. 1% of the viewport's shorter side.
+    Vmin(f32),
+    /// `vmax`. 1% of the viewport's longer side.
+    Vmax(f32),
+}
+
+/// The page box dimensions (px) that viewport units (`vw`/`vh`/`vmin`/`vmax`) resolve against.
+///
+/// Print has no browser-like viewport, so the page box (paper size) is treated as
+/// the viewport. Threading the dimensions through every property's length resolution
+/// (`resolve`) would mean changing hundreds of signatures, so a single value for the
+/// whole document is kept in thread-local storage, which the engine sets via
+/// [`set_viewport_px`] before style computation. The default is A4 (96dpi), so even
+/// if setting it is forgotten the value is still reasonable (in actual rendering it is always set).
+mod viewport {
+    use std::cell::Cell;
+
+    // Default value: A4 = 210mm × 297mm converted to px at 96dpi.
+    const DEFAULT: (f32, f32) = (793.7008, 1122.5197);
+
+    thread_local! {
+        static VIEWPORT_PX: Cell<(f32, f32)> = const { Cell::new(DEFAULT) };
+    }
+
+    pub fn set(width: f32, height: f32) {
+        VIEWPORT_PX.with(|v| v.set((width, height)));
+    }
+
+    pub fn get() -> (f32, f32) {
+        VIEWPORT_PX.with(Cell::get)
+    }
+}
+
+/// Sets the page box dimensions (px) that viewport units resolve against. The engine
+/// calls this just before style computation. Independent documents with the same page
+/// size, such as the cover and table of contents, are processed on the same thread, so
+/// setting it once is enough.
+pub fn set_viewport_px(width: f32, height: f32) {
+    viewport::set(width, height);
 }
 
 impl SpecifiedLength {
@@ -629,16 +672,28 @@ impl SpecifiedLength {
     pub fn is_negative(self) -> bool {
         match self {
             Self::Px(v) | Self::Em(v) | Self::Rem(v) => v < 0.0,
+            Self::Vw(v) | Self::Vh(v) | Self::Vmin(v) | Self::Vmax(v) => v < 0.0,
         }
     }
 
     /// `font_size`(em基準、px)と`root_font_size`(rem基準、px)を使って
-    /// 計算値の[`Length`]へ解決する。
+    /// 計算値の[`Length`]へ解決する。ビューポート単位は[`set_viewport_px`]で
+    /// 設定されたページboxを基準にする。
     pub fn resolve(self, font_size: f32, root_font_size: f32) -> Length {
         match self {
             Self::Px(px) => Length(px),
             Self::Em(em) => Length(em * font_size),
             Self::Rem(rem) => Length(rem * root_font_size),
+            Self::Vw(vw) => Length(vw / 100.0 * viewport::get().0),
+            Self::Vh(vh) => Length(vh / 100.0 * viewport::get().1),
+            Self::Vmin(v) => {
+                let (w, h) = viewport::get();
+                Length(v / 100.0 * w.min(h))
+            }
+            Self::Vmax(v) => {
+                let (w, h) = viewport::get();
+                Length(v / 100.0 * w.max(h))
+            }
         }
     }
 }

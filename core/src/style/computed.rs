@@ -4642,16 +4642,39 @@ mod tests {
     }
 
     #[test]
-    fn viewport_units_are_still_rejected() {
-        // ビューポート単位は印刷に概念が無いため非対応のまま(宣言ごと無視)。
+    fn viewport_units_resolve_against_the_page_box() {
+        // In print, the page box (paper size) is treated as the viewport.
+        crate::style::set_viewport_px(800.0, 600.0);
         let dom = html::parse(br#"<div></div>"#);
         let div = find(&dom, dom.document(), "div").expect("div not found");
 
-        let styles = compute_styles(
+        // 50vh is 50% of 600px = 300px, and 25vw is 25% of 800px = 200px. To avoid
+        // depending on the internal representation, verify by matching the equivalent px specification.
+        let vh = compute_styles(
             &dom,
             &Stylesheet::default(),
-            &parse_stylesheet("div { width: 50vh; }"),
+            &parse_stylesheet("div { width: 50vh; height: 25vw; }"),
         );
-        assert_eq!(styles[&div].width, LengthPercentageOrAuto::Auto);
+        let px = compute_styles(
+            &dom,
+            &Stylesheet::default(),
+            &parse_stylesheet("div { width: 300px; height: 200px; }"),
+        );
+        assert_eq!(vh[&div].width, px[&div].width);
+        assert_eq!(vh[&div].height, px[&div].height);
+
+        // vmin is based on the shorter side (600), vmax on the longer side (800).
+        let vminmax = compute_styles(
+            &dom,
+            &Stylesheet::default(),
+            &parse_stylesheet("div { width: 10vmin; height: 10vmax; }"),
+        );
+        let expect = compute_styles(
+            &dom,
+            &Stylesheet::default(),
+            &parse_stylesheet("div { width: 60px; height: 80px; }"),
+        );
+        assert_eq!(vminmax[&div].width, expect[&div].width);
+        assert_eq!(vminmax[&div].height, expect[&div].height);
     }
 }
