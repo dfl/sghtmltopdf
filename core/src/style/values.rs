@@ -622,16 +622,68 @@ pub enum SpecifiedLength {
     Px(f32),
     Em(f32),
     Rem(f32),
+    /// `vw`。ビューポート(印刷ではページboxそのもの)幅の1%。
+    Vw(f32),
+    /// `vh`。ビューポート高さの1%。
+    Vh(f32),
+    /// `vmin`。ビューポートの短辺の1%。
+    Vmin(f32),
+    /// `vmax`。ビューポートの長辺の1%。
+    Vmax(f32),
+}
+
+/// ビューポート単位(`vw`/`vh`/`vmin`/`vmax`)の基準となるページboxの寸法(px)。
+///
+/// 印刷にはブラウザのようなビューポートが無いため、ページbox(用紙サイズ)を
+/// ビューポートとみなす。全プロパティの長さ解決(`resolve`)へ寸法を引き回すと
+/// 数百箇所の署名変更になるため、文書全体で1つの値をスレッドローカルに置き、
+/// エンジンがスタイル計算の前に[`set_viewport_px`]で設定する。既定はA4(96dpi)
+/// なので、設定し忘れても妥当な値にはなる(実描画では必ず設定される)。
+mod viewport {
+    use std::cell::Cell;
+
+    // A4 = 210mm × 297mm を 96dpi で px 換算した既定値。
+    const DEFAULT: (f32, f32) = (793.7008, 1122.5197);
+
+    thread_local! {
+        static VIEWPORT_PX: Cell<(f32, f32)> = const { Cell::new(DEFAULT) };
+    }
+
+    pub fn set(width: f32, height: f32) {
+        VIEWPORT_PX.with(|v| v.set((width, height)));
+    }
+
+    pub fn get() -> (f32, f32) {
+        VIEWPORT_PX.with(Cell::get)
+    }
+}
+
+/// ビューポート単位の基準となるページboxの寸法(px)を設定する。エンジンが
+/// スタイル計算の直前に呼ぶ。表紙・目次など同じページサイズの独立ドキュメントも
+/// 同じスレッドで処理されるため、1回の設定で足りる。
+pub fn set_viewport_px(width: f32, height: f32) {
+    viewport::set(width, height);
 }
 
 impl SpecifiedLength {
     /// `font_size`(em基準、px)と`root_font_size`(rem基準、px)を使って
-    /// 計算値の[`Length`]へ解決する。
+    /// 計算値の[`Length`]へ解決する。ビューポート単位は[`set_viewport_px`]で
+    /// 設定されたページboxを基準にする。
     pub fn resolve(self, font_size: f32, root_font_size: f32) -> Length {
         match self {
             Self::Px(px) => Length(px),
             Self::Em(em) => Length(em * font_size),
             Self::Rem(rem) => Length(rem * root_font_size),
+            Self::Vw(vw) => Length(vw / 100.0 * viewport::get().0),
+            Self::Vh(vh) => Length(vh / 100.0 * viewport::get().1),
+            Self::Vmin(v) => {
+                let (w, h) = viewport::get();
+                Length(v / 100.0 * w.min(h))
+            }
+            Self::Vmax(v) => {
+                let (w, h) = viewport::get();
+                Length(v / 100.0 * w.max(h))
+            }
         }
     }
 }

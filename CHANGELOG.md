@@ -9,16 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Paint `linear-gradient()` backgrounds as native PDF axial shadings. `background-image` and
-  the `background` shorthand now accept `linear-gradient(...)` (direction as an `<angle>` or a
-  single-side `to <side>` keyword; opaque colour stops with optional percentage positions,
-  distributed the CSS way) and a comma-separated list of layers. Each gradient becomes a
-  DeviceRGB axial shading (`ShadingType 2`) with an exponential/stitching colour ramp, clipped
-  to the border-box. Colour stops resolve `currentcolor`. Not yet painted (the layer is skipped
-  without invalidating the declaration): `radial-gradient`/`conic-gradient`, corner directions
-  (`to top right`), and stops with alpha (`transparent`, `rgba(...)` with alpha < 1) — those
-  need a transparency soft mask. Gradients inside an `opacity < 1` subtree are also not yet
-  painted.
+- Support viewport-relative length units `vw`, `vh`, `vmin`, and `vmax`, previously rejected.
+  Print has no browser viewport, so they resolve against the page box: `vh` is 1% of the page
+  height, `vw` 1% of the width, `vmin`/`vmax` the shorter/longer side. This makes full-page
+  layouts written as `height: 100vh` work. The page box is document-global (a `@page`-resolved
+  size), set once before style computation; cover and table-of-contents documents use the same
+  page size.
 
 ### Fixed
 

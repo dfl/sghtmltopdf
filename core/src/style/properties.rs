@@ -1381,7 +1381,7 @@ pub(crate) fn parse_length<'i>(
 /// CSSの絶対単位はいずれもpxとの比が固定(1in = 96px)なので、パースの時点で
 /// pxへ畳んでしまう。こうすると[`SpecifiedLength`]に単位を持ち込まずに済み、
 /// 計算値の解決やレイアウトは一切変わらない。ビューポート単位(`vh`等)は
-/// 印刷にビューポートの概念が無いため対象外。
+/// ページboxを基準に別途解決するため、ここ(絶対単位の畳み込み)では扱わない。
 fn absolute_length_px(unit: &str) -> Option<f32> {
     const PX_PER_IN: f32 = 96.0;
     if unit.eq_ignore_ascii_case("px") {
@@ -1406,8 +1406,8 @@ fn absolute_length_px(unit: &str) -> Option<f32> {
 }
 
 /// `<数値><単位>`の単位部分を見て、絶対単位(`px`/`mm`/`cm`/`in`/`pt`/`pc`/`Q`)
-/// または相対単位(`em`/`rem`)として解釈する。
-/// ビューポート単位(`vh`等)は非対応。
+/// ・相対単位(`em`/`rem`)・ビューポート単位(`vw`/`vh`/`vmin`/`vmax`)
+/// として解釈する。
 fn parse_length_unit<'i>(
     input: &Parser<'i, '_>,
     value: f32,
@@ -1419,6 +1419,14 @@ fn parse_length_unit<'i>(
         Ok(SpecifiedLength::Em(value))
     } else if unit.eq_ignore_ascii_case("rem") {
         Ok(SpecifiedLength::Rem(value))
+    } else if unit.eq_ignore_ascii_case("vw") {
+        Ok(SpecifiedLength::Vw(value))
+    } else if unit.eq_ignore_ascii_case("vh") {
+        Ok(SpecifiedLength::Vh(value))
+    } else if unit.eq_ignore_ascii_case("vmin") {
+        Ok(SpecifiedLength::Vmin(value))
+    } else if unit.eq_ignore_ascii_case("vmax") {
+        Ok(SpecifiedLength::Vmax(value))
     } else {
         Err(input.new_custom_error(()))
     }

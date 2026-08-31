@@ -4605,16 +4605,39 @@ mod tests {
     }
 
     #[test]
-    fn viewport_units_are_still_rejected() {
-        // ビューポート単位は印刷に概念が無いため非対応のまま(宣言ごと無視)。
+    fn viewport_units_resolve_against_the_page_box() {
+        // 印刷ではページbox(用紙サイズ)をビューポートとみなす。
+        crate::style::set_viewport_px(800.0, 600.0);
         let dom = html::parse(br#"<div></div>"#);
         let div = find(&dom, dom.document(), "div").expect("div not found");
 
-        let styles = compute_styles(
+        // 50vh は 600px の 50% = 300px、25vw は 800px の 25% = 200px。内部表現に
+        // 依存しないよう、等価な px 指定と一致することで確かめる。
+        let vh = compute_styles(
             &dom,
             &Stylesheet::default(),
-            &parse_stylesheet("div { width: 50vh; }"),
+            &parse_stylesheet("div { width: 50vh; height: 25vw; }"),
         );
-        assert_eq!(styles[&div].width, LengthPercentageOrAuto::Auto);
+        let px = compute_styles(
+            &dom,
+            &Stylesheet::default(),
+            &parse_stylesheet("div { width: 300px; height: 200px; }"),
+        );
+        assert_eq!(vh[&div].width, px[&div].width);
+        assert_eq!(vh[&div].height, px[&div].height);
+
+        // vmin は短辺(600)、vmax は長辺(800)基準。
+        let vminmax = compute_styles(
+            &dom,
+            &Stylesheet::default(),
+            &parse_stylesheet("div { width: 10vmin; height: 10vmax; }"),
+        );
+        let expect = compute_styles(
+            &dom,
+            &Stylesheet::default(),
+            &parse_stylesheet("div { width: 60px; height: 80px; }"),
+        );
+        assert_eq!(vminmax[&div].width, expect[&div].width);
+        assert_eq!(vminmax[&div].height, expect[&div].height);
     }
 }
