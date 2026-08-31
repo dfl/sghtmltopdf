@@ -72,6 +72,7 @@ subsetter = { version = "0.2.6", default-features = false }
 taffy = "0.12.2"
 tiny_http = { version = "0.12", optional = true }
 ureq = "3.3.0"
+resvg = { version = "0.48.1", default-features = false }
 
 [dev-dependencies]
 dhat = "0.3.3"

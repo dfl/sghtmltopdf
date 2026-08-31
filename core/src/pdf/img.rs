@@ -1,4 +1,4 @@
-//! 画像バイト列(JPEG/PNG/WebP)をPDF Image XObject埋め込み用データへ変換する。
+//! 画像バイト列(JPEG/PNG/WebP/SVG)をPDF Image XObject埋め込み用データへ変換する。
 //!
 //! `core/src/img/`(URL解決・フェッチ・キャッシュ)が返す生バイト列を受け取り、
 //! フォーマットをマジックバイトで判別してデコードする。JPEGはデコードせず、
@@ -12,6 +12,7 @@ use std::io::Cursor;
 
 use pdf_writer::{Filter, Finish};
 use png::Transformations;
+use resvg::{tiny_skia, usvg};
 
 use super::font::deflate;
 
@@ -98,16 +99,26 @@ fn sniff_format(bytes: &[u8]) -> Option<ImageFormat> {
 }
 
 /// 画像バイト列をフォーマット判別した上でデコードし、PDF埋め込み用データへ
-/// 変換する。
+/// 変換する。SVG(テキストマーカーが無いためバイナリのマジックバイトでは
+/// 判別できない)は、ラスタ形式のどれでもなく`<svg`を含む場合に限りSVGとみなす。
 pub fn decode_image(bytes: &[u8]) -> Result<PreparedImage, ImageDecodeError> {
     match sniff_format(bytes) {
         Some(ImageFormat::Jpeg) => decode_jpeg(bytes),
         Some(ImageFormat::Png) => decode_png(bytes),
         Some(ImageFormat::WebP) => decode_webp(bytes),
+        None if looks_like_svg(bytes) => decode_svg(bytes),
         None => Err(ImageDecodeError(
-            "対応していない画像フォーマットです(JPEG/PNG/WebPのいずれでもありません)".to_string(),
+            "対応していない画像フォーマットです(JPEG/PNG/WebP/SVGのいずれでもありません)"
+                .to_string(),
         )),
     }
+}
+
+/// 先頭付近(BOM・XML宣言・DOCTYPE・コメント・空白を読み飛ばした範囲)に
+/// `<svg`があればSVGとみなす。ラスタ形式の判別に外れた後にのみ呼ぶ。
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    let head = &bytes[..bytes.len().min(1024)];
+    head.windows(4).any(|w| w.eq_ignore_ascii_case(b"<svg"))
 }
 
 /// SOF0(ベースライン)/SOF2(プログレッシブ)マーカーだけを読んでwidth/height/
@@ -274,6 +285,87 @@ fn decode_webp(bytes: &[u8]) -> Result<PreparedImage, ImageDecodeError> {
             bits_per_component: 8,
         }),
     })
+}
+
+/// 小さなSVGを高解像度化するときの目標(大きい辺のpx)。ベクタなので拡大しても
+/// 破綻しないが、ラスタライズ後は固定解像度の画像として埋め込むため、後で拡大
+/// 表示されても粗くならないよう、intrinsicが小さいSVGはこの辺長まで supersample
+/// する。大きいSVGは等倍(intrinsic px)のまま。
+const SVG_SUPERSAMPLE_TARGET_PX: f32 = 1024.0;
+
+/// SVGをラスタライズしてPDF埋め込み用データへ変換する。resvgでRGBA(premultiplied)
+/// のpixmapへ描き、straight alphaへ戻してから、PNGと同じく色本体とアルファを
+/// 分離して`/SMask`にする。テキスト(`<text>`)はfeature`text`を外しているため
+/// 描画されない(ロゴ等のパス主体のSVGを対象とする)。
+fn decode_svg(bytes: &[u8]) -> Result<PreparedImage, ImageDecodeError> {
+    let options = usvg::Options::default();
+    let tree = usvg::Tree::from_data(bytes, &options)
+        .map_err(|e| ImageDecodeError(format!("SVGの解析に失敗しました: {e}")))?;
+
+    let size = tree.size();
+    let (intrinsic_w, intrinsic_h) = (size.width(), size.height());
+    if !(intrinsic_w > 0.0 && intrinsic_h > 0.0) {
+        return Err(ImageDecodeError(
+            "SVGの寸法が取得できません(width/height/viewBoxのいずれも無い)".to_string(),
+        ));
+    }
+
+    // 小さいSVGだけ拡大(等倍未満にはしない)。
+    let scale = (SVG_SUPERSAMPLE_TARGET_PX / intrinsic_w.max(intrinsic_h)).max(1.0);
+    let width = (intrinsic_w * scale).ceil() as u32;
+    let height = (intrinsic_h * scale).ceil() as u32;
+    ensure_decoded_size_within_limit(width as u64 * height as u64 * 4, width, height)?;
+
+    let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or_else(|| {
+        ImageDecodeError(format!(
+            "SVGのラスタライズ用バッファを確保できません({width}x{height})"
+        ))
+    })?;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+
+    // tiny_skiaのpixmapはpremultiplied alpha。/SMaskは straight color を前提と
+    // するため、アルファで割り戻してから色本体と分離する。
+    let mut rgba = pixmap.data().to_vec();
+    unpremultiply_rgba(&mut rgba);
+    let (color_bytes, alpha_bytes) = split_interleaved_alpha(&rgba, 4);
+
+    Ok(PreparedImage {
+        width,
+        height,
+        color: ImagePlane {
+            data: deflate(&color_bytes),
+            filter: Filter::FlateDecode,
+            color_space: PlaneColorSpace::Rgb,
+            bits_per_component: 8,
+        },
+        alpha: Some(ImagePlane {
+            data: deflate(&alpha_bytes),
+            filter: Filter::FlateDecode,
+            color_space: PlaneColorSpace::Gray,
+            bits_per_component: 8,
+        }),
+    })
+}
+
+/// premultiplied RGBA を straight(非乗算)RGBA へ戻す。`c_straight = c_pre * 255 / a`
+/// (四捨五入、255でクランプ)。完全透明画素の色は0にする。
+fn unpremultiply_rgba(rgba: &mut [u8]) {
+    for px in rgba.chunks_exact_mut(4) {
+        let a = px[3] as u16;
+        if a == 0 {
+            px[0] = 0;
+            px[1] = 0;
+            px[2] = 0;
+        } else if a < 255 {
+            for c in &mut px[..3] {
+                *c = (((*c as u16) * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
 }
 
 /// `stride`(3+1=4、または1+1=2)おきにインターリーブされたバッファから、
@@ -713,6 +805,50 @@ mod tests {
     fn unrecognized_bytes_are_rejected() {
         let result = decode_image(b"not an image");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn svg_is_detected_by_content_not_magic_bytes() {
+        assert!(looks_like_svg(
+            br#"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"></svg>"#
+        ));
+        assert!(looks_like_svg(b"<svg viewBox=\"0 0 1 1\"></svg>"));
+        assert!(!looks_like_svg(b"<html><body></body></html>"));
+        assert!(!looks_like_svg(b"not markup at all"));
+    }
+
+    #[test]
+    fn svg_is_rasterized_into_color_and_smask_planes() {
+        // 左半分だけ不透明な赤。viewBox 10x10 は小さいので supersample される。
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+            <rect x="0" y="0" width="5" height="10" fill="#ff0000"/></svg>"##;
+        let prepared = decode_image(svg).expect("svg should rasterize");
+
+        // scale = ceil(1024/10) 相当。大きい辺が 1024 になる。
+        assert_eq!(prepared.width, 1024);
+        assert_eq!(prepared.height, 1024);
+        assert_eq!(prepared.color.color_space, PlaneColorSpace::Rgb);
+
+        let alpha = prepared
+            .alpha
+            .expect("svg with transparency needs an alpha plane");
+        assert_eq!(alpha.color_space, PlaneColorSpace::Gray);
+
+        let color = inflate(&prepared.color.data);
+        let alpha = inflate(&alpha.data);
+        assert_eq!(color.len(), 1024 * 1024 * 3);
+        assert_eq!(alpha.len(), 1024 * 1024);
+
+        // 行0の左寄り(col=200)は不透明な赤、右寄り(col=900)は透明。
+        let left = 200;
+        let right = 900;
+        assert_eq!(alpha[left], 255, "left half is opaque");
+        assert_eq!(alpha[right], 0, "right half is transparent");
+        assert_eq!(
+            (color[left * 3], color[left * 3 + 1], color[left * 3 + 2]),
+            (255, 0, 0),
+            "left half is red (un-premultiplied)"
+        );
     }
 
     #[test]

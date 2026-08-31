@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Render SVG images (`<img>` and CSS `background-image`), previously unsupported. SVGs are
+  rasterised with `resvg` (added with `default-features = false`, so no text/font stack) into
+  an RGBA pixmap and embedded through the existing image path, with the alpha channel becoming
+  the `/SMask`. An SVG smaller than its likely display size is supersampled first so it stays
+  crisp when scaled up. Detection is by content (`<svg`), since SVG has no binary magic bytes;
+  the raster formats are still tried first. Not rendered: `<text>` (the `text` feature is off,
+  so outline your text to paths), filters, and animation.
+
 ### Fixed
 
 - Stop rounding flex and grid item sizes to whole pixels (#15). taffy rounds its final
