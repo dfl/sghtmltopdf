@@ -9,13 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Support `--dump-outline <file>`, previously rejected as unsupported. It writes the
-  document's headings (`h1`–`h6`) and their final page numbers to a wkhtmltopdf-compatible
-  XML file (the `http://code.google.com/p/wkhtmltopdf/outline` namespace, nested `<item>`
-  elements with `title`, `page` and `link`). The page number is the 1-based physical page
-  counting any cover and table of contents, matching wkhtmltopdf. It reuses the same
-  heading collection as `--toc` but works independently of it, and like `--toc` it is not
-  available in streaming mode.
+- Paint `linear-gradient()` backgrounds as native PDF axial shadings. `background-image` and
+  the `background` shorthand now accept `linear-gradient(...)` (direction as an `<angle>` or a
+  single-side `to <side>` keyword; opaque colour stops with optional percentage positions,
+  distributed the CSS way) and a comma-separated list of layers. Each gradient becomes a
+  DeviceRGB axial shading (`ShadingType 2`) with an exponential/stitching colour ramp, clipped
+  to the border-box. Colour stops resolve `currentcolor`. Not yet painted (the layer is skipped
+  without invalidating the declaration): `radial-gradient`/`conic-gradient`, corner directions
+  (`to top right`), and stops with alpha (`transparent`, `rgba(...)` with alpha < 1) — those
+  need a transparency soft mask. Gradients inside an `opacity < 1` subtree are also not yet
+  painted.
 
 ### Fixed
 

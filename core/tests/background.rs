@@ -207,3 +207,57 @@ fn all_background_details_combined_render_a_valid_pdf_end_to_end() {
     let bytes = build_pdf(html_src, &css);
     assert!(count_occurrences(&bytes, b"%%EOF") > 0);
 }
+
+#[test]
+fn a_multi_stop_linear_gradient_emits_an_axial_shading_end_to_end() {
+    // 3経由点 → 指数関数2つを stitching(Type 3)で繋いだ軸シェーディング(Type 2)。
+    let css = r#"body { margin: 0; }
+       .box { width: 200px; height: 100px;
+              background: linear-gradient(90deg, #ff0000 0%, #00ff00 50%, #0000ff 100%); }"#;
+    let bytes = build_pdf(r#"<div class="box"></div>"#, css);
+
+    assert!(
+        count_occurrences(&bytes, b"/ShadingType 2") > 0,
+        "an axial shading object should be written"
+    );
+    assert!(
+        count_occurrences(&bytes, b"/FunctionType 3") > 0,
+        "3+ stops should stitch exponential functions"
+    );
+    // content stream 側では名前付きシェーディングを参照して塗る。
+    let content = decompressed_stream_bytes(&bytes);
+    assert!(
+        count_occurrences(&content, b"/Gsh") > 0,
+        "the content stream should reference the gradient shading resource"
+    );
+}
+
+#[test]
+fn an_unsupported_radial_layer_is_skipped_but_the_linear_base_still_paints() {
+    // 複数背景: 未対応の radial-gradient は層ごと読み飛ばし、linear の基層だけ
+    // シェーディングになる(宣言全体を捨てない)。
+    let css = r#"body { margin: 0; }
+       .box { width: 200px; height: 100px;
+              background: radial-gradient(circle, #ffffff, #000000),
+                          linear-gradient(0deg, #123456, #abcdef); }"#;
+    let bytes = build_pdf(r#"<div class="box"></div>"#, css);
+    assert_eq!(
+        count_occurrences(&bytes, b"/ShadingType 2"),
+        1,
+        "only the linear base layer should emit a shading; the radial is skipped"
+    );
+}
+
+#[test]
+fn a_gradient_with_a_transparent_stop_is_not_painted() {
+    // alpha 付き(`transparent`)の層は今は描かない。宣言は有効だがシェーディングは出ない。
+    let css = r#"body { margin: 0; }
+       .box { width: 200px; height: 100px;
+              background: linear-gradient(90deg, #ff0000 0%, transparent 100%); }"#;
+    let bytes = build_pdf(r#"<div class="box"></div>"#, css);
+    assert_eq!(
+        count_occurrences(&bytes, b"/ShadingType 2"),
+        0,
+        "a gradient with an alpha stop should be skipped for now"
+    );
+}
