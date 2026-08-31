@@ -57,10 +57,10 @@ use crate::layout::{
 };
 use crate::sink::Sink;
 use crate::style::{
-    compose_transform, resolve_margin_box_content, resolve_page_rules, BackgroundRepeat,
-    BackgroundSize, BorderCollapse, BorderStyle, Color, ComputedBoxShadow, ComputedStyle,
-    CornerRadius, EmphasisPosition, EmphasisShape, EmphasisStyle, EmptyCells, Length,
-    LengthPercentage, LengthPercentageOrAuto, MarginBoxArea, ObjectFit, PageRule, Position,
+    compose_transform, resolve_margin_box_content, resolve_page_rules, BackgroundClip,
+    BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, Color, ComputedBoxShadow,
+    ComputedStyle, CornerRadius, EmphasisPosition, EmphasisShape, EmphasisStyle, EmptyCells,
+    Length, LengthPercentage, LengthPercentageOrAuto, MarginBoxArea, ObjectFit, PageRule, Position,
     PropertyDeclaration, RgbaColor,
 };
 
@@ -1594,16 +1594,31 @@ fn render_box_with_style_inner(
             }
         }
         LaidOutContent::Inline(lines) => {
-            for line in lines {
-                render_line(
+            // `background-clip: text`+勾配なら、テキストをグリフでクリップした
+            // グラデーションとして描き、通常のテキスト塗りは省く。
+            let clipped = style.background_clip == BackgroundClip::Text
+                && render_clip_text_gradient(
                     content,
-                    line,
+                    b,
+                    style,
                     fonts,
                     settings,
                     remaps,
                     font_resource_names,
-                    alpha_gs_names,
+                    lines,
                 );
+            for line in lines {
+                if !clipped {
+                    render_line(
+                        content,
+                        line,
+                        fonts,
+                        settings,
+                        remaps,
+                        font_resource_names,
+                        alpha_gs_names,
+                    );
+                }
                 // 行内の`display: inline-block`は通常のブロックと同じ
                 // 描画経路を通す(枠線・背景・中身のテキスト)。
                 for atomic in &line.atomics {
@@ -2014,6 +2029,11 @@ fn render_background_gradients(
 ) {
     let Some(node) = node else { return };
     if style.background_gradients.is_empty() {
+        return;
+    }
+    // `background-clip: text`のときは矩形ではなくテキストのグリフでクリップして
+    // 描く([`render_clip_text_gradient`])ので、ここ(矩形の背景)では描かない。
+    if style.background_clip == BackgroundClip::Text {
         return;
     }
     let layers = gradient::layers_for(style, border_box, settings);
@@ -3292,6 +3312,80 @@ fn show_run_glyphs(
     if !pending.is_empty() {
         items.show(pdf_writer::Str(&pending));
     }
+}
+
+/// `background-clip: text` + `linear-gradient` の要素を「グラデーション文字」
+/// として描く。要素の全グリフを1つの`BT...ET`にクリップモード(Tr 7)で積み、
+/// `ET`でクリップが全グリフの和に確定した後に、背景と同じ軸シェーディングを
+/// そのクリップへ流し込む。行ごとに別々の`BT...ET`にすると、PDFはテキスト
+/// クリップを`ET`ごとに積(intersection)で取るため行同士で空になってしまう。
+/// そのため`render_line`は使わず、ここで全行を1つのテキストオブジェクトに
+/// まとめる。描いたら`true`を返し、呼び出し側は通常のテキスト描画を省く。
+#[allow(clippy::too_many_arguments)]
+fn render_clip_text_gradient(
+    content: &mut RenderTarget<'_>,
+    b: &LaidOutBox,
+    style: &ComputedStyle,
+    fonts: &FontCollection,
+    settings: &PageSettings,
+    remaps: Option<&[HashMap<u16, u16>]>,
+    font_resource_names: &[String],
+    lines: &[LineBox],
+) -> bool {
+    let Some(node) = b.node else { return false };
+    let layers = gradient::layers_for(style, b.layout.border_box(), settings);
+    if layers.is_empty() {
+        return false;
+    }
+    // クリップに使えるグリフが1つも無ければ通常描画に任せる(空クリップに
+    // シェーディングを流すと何も出ず、テキストが消えるのを避ける)。
+    let has_glyphs = lines
+        .iter()
+        .any(|line| line.runs.iter().any(|run| !run.glyphs.is_empty()));
+    if !has_glyphs {
+        return false;
+    }
+
+    content.save_state();
+    content.begin_text();
+    content.set_text_rendering_mode(TextRenderingMode::Clip);
+    for line in lines {
+        let baseline_y = to_pdf_y(settings, line.rect.y + line.baseline);
+        for run in &line.runs {
+            if run.glyphs.is_empty() {
+                continue;
+            }
+            let remap = match remaps {
+                Some(remaps) => match remaps.get(run.font_index) {
+                    Some(remap) => Some(remap),
+                    None => continue,
+                },
+                None => None,
+            };
+            let (Some(resource_name), Some(font)) = (
+                font_resource_names.get(run.font_index),
+                fonts.get(run.font_index),
+            ) else {
+                continue;
+            };
+            let x = settings.margin.left + line.rect.x + run.x_offset;
+            let shear = if run.italic { ITALIC_SHEAR } else { 0.0 };
+            content.set_font(Name(resource_name.as_bytes()), run.font_size);
+            content.set_text_matrix([1.0, 0.0, shear, 1.0, x, baseline_y + run.baseline_shift]);
+            content.set_char_spacing(run.letter_spacing);
+            show_run_glyphs(content, run, font, remap);
+        }
+    }
+    content.end_text();
+
+    // 手前の層(CSS順で先)が上に来るよう逆順に流し込む。座標は背景と同じ
+    // 要素box基準([`collect_gradient_boxes`]と一致)なので、クリップだけが
+    // 矩形からグリフへ変わる。
+    for i in (0..layers.len()).rev() {
+        content.shading(Name(gradient::shading_name(node.0, i).as_bytes()));
+    }
+    content.restore_state();
+    true
 }
 
 fn render_line(

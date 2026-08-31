@@ -38,6 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Support `background-clip: text` (and the `-webkit-` alias) together with a `linear-gradient`
+  background, producing gradient-filled text. The element's glyphs are accumulated into the PDF
+  clip path (text rendering mode 7) across one text object, then the same axial shading used for
+  a gradient background is painted into that clip. Box-keyword values (`border-box` etc.) still
+  paint border-box-based. Not supported: `background-clip: text` with a non-gradient background,
+  or an element whose clipped content includes block descendants (only its own inline text is
+  clipped).
+
 - Paint `linear-gradient()` backgrounds as native PDF axial shadings. `background-image` and
   the `background` shorthand now accept `linear-gradient(...)` (direction as an `<angle>` or a
   single-side `to <side>` keyword; opaque colour stops with optional percentage positions,

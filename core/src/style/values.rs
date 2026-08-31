@@ -971,6 +971,17 @@ pub enum BackgroundAttachment {
     Fixed,
 }
 
+/// `background-clip`。`text`のみ特別扱いし、`border-box`/`padding-box`/
+/// `content-box`はいずれも既定(border-box基準の描画)へ寄せる。`text`は背景を
+/// 要素のテキストのグリフでクリップする(`linear-gradient`と併用したときだけ
+/// 効果があり、グラデーション文字を作る)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackgroundClip {
+    #[default]
+    BorderBox,
+    Text,
+}
+
 /// 色。`currentcolor`の解決や継承は計算スタイルの役割なので、
 /// ここではパース結果をそのまま保持する。
 #[derive(Debug, Clone, Copy, PartialEq)]
