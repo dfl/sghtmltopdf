@@ -11,14 +11,14 @@ use super::values::{
     CaptionSide, Clear, Color, ContentPart, Display, EmphasisPosition, EmphasisShape,
     EmphasisStyle, EmptyCells, FlexDirection, FlexWrap, Float, FontStyle, FontWeight, GridArea,
     GridAutoFlow, GridLine, Hyphens, JustifyContent, ListStylePosition, ListStyleType, ObjectFit,
-    Overflow, OverflowWrap, Position, QuotePair, RepeatCount, SpecifiedBackgroundPosition,
-    SpecifiedBackgroundSize, SpecifiedBoxShadow, SpecifiedCalc, SpecifiedColorStop,
-    SpecifiedCornerRadius, SpecifiedFlexBasis, SpecifiedLength, SpecifiedLengthPercentage,
-    SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight, SpecifiedLinearGradient,
-    SpecifiedMaxSize, SpecifiedSpacing, SpecifiedTextShadow, SpecifiedTrackBreadth,
-    SpecifiedTrackComponent, SpecifiedTrackList, SpecifiedTrackSize, SpecifiedTransformFunction,
-    SpecifiedVerticalAlign, TableLayout, TextAlign, TextDecorationLine, TextOverflow,
-    TextTransform, Visibility, WhiteSpace, WordBreak, ZIndex,
+    Overflow, OverflowWrap, Position, QuotePair, RepeatCount, SpecifiedBackgroundGradient,
+    SpecifiedBackgroundPosition, SpecifiedBackgroundSize, SpecifiedBoxShadow, SpecifiedCalc,
+    SpecifiedColorStop, SpecifiedCornerRadius, SpecifiedFlexBasis, SpecifiedLength,
+    SpecifiedLengthPercentage, SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight,
+    SpecifiedLinearGradient, SpecifiedMaxSize, SpecifiedRadialGradient, SpecifiedSpacing,
+    SpecifiedTextShadow, SpecifiedTrackBreadth, SpecifiedTrackComponent, SpecifiedTrackList,
+    SpecifiedTrackSize, SpecifiedTransformFunction, SpecifiedVerticalAlign, TableLayout, TextAlign,
+    TextDecorationLine, TextOverflow, TextTransform, Visibility, WhiteSpace, WordBreak, ZIndex,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,11 +68,12 @@ pub enum PropertyDeclaration {
     /// `url(...)`(生の値、解決は呼び出し側任せ、`FontFaceSource::Url`と
     /// 同じ方針)。`None`は`none`(背景画像なし)を表す。
     BackgroundImage(Option<String>),
-    /// `background-image`/`background`の`linear-gradient()`層(手前→奥のCSS順)。
-    /// `radial-gradient`など未対応の層は含めない(パース側で読み飛ばす)。
-    /// `background-image`が指定された宣言では常に生成し、勾配が無ければ空にする
-    /// (同じプロパティの再指定で確実に上書きするため)。
-    BackgroundGradients(Vec<SpecifiedLinearGradient>),
+    /// `background-image`/`background`の勾配層(`linear-gradient()`/
+    /// `radial-gradient()`、手前→奥のCSS順)。`conic-gradient`など未対応の層は
+    /// 含めない(パース側で読み飛ばす)。`background-image`が指定された宣言では
+    /// 常に生成し、勾配が無ければ空にする(同じプロパティの再指定で確実に
+    /// 上書きするため)。
+    BackgroundGradients(Vec<SpecifiedBackgroundGradient>),
     BackgroundPosition(SpecifiedBackgroundPosition),
     BackgroundSize(SpecifiedBackgroundSize),
     BackgroundRepeat(BackgroundRepeat),
@@ -1917,15 +1918,16 @@ fn parse_quotes<'i>(
 enum BgLayer {
     None,
     Url(String),
-    Gradient(SpecifiedLinearGradient),
+    Gradient(SpecifiedBackgroundGradient),
     Unsupported,
 }
 
 /// カンマ区切りの背景画像リストを1層ずつ解釈する。`url`は最後の指定が勝ち、
-/// `linear-gradient`はCSS順(手前→奥)に集める。`none`/未対応の層は捨てる。
+/// 勾配(`linear`/`radial`)はCSS順(手前→奥)に集める。`none`/未対応の層は
+/// 捨てる。
 fn parse_background_image_value<'i>(
     input: &mut Parser<'i, '_>,
-) -> Result<(Option<String>, Vec<SpecifiedLinearGradient>), ParseError<'i, ()>> {
+) -> Result<(Option<String>, Vec<SpecifiedBackgroundGradient>), ParseError<'i, ()>> {
     let mut url = None;
     let mut gradients = Vec::new();
     for layer in input.parse_comma_separated(parse_background_image_layer)? {
@@ -1938,7 +1940,8 @@ fn parse_background_image_value<'i>(
     Ok((url, gradients))
 }
 
-/// 背景画像1層。`none` / `url()` / `linear-gradient()` / (読み飛ばす)関数。
+/// 背景画像1層。`none` / `url()` / `linear-gradient()` / `radial-gradient()` /
+/// (読み飛ばす)関数。
 fn parse_background_image_layer<'i>(
     input: &mut Parser<'i, '_>,
 ) -> Result<BgLayer, ParseError<'i, ()>> {
@@ -1962,11 +1965,20 @@ fn parse_background_image_layer<'i>(
             if let Ok(gradient) = parse_linear_gradient_body(input) {
                 // 経由点の後に残りがあれば未対応の形。中身を読み飛ばして層ごと捨てる。
                 while input.next().is_ok() {}
-                return Ok(BgLayer::Gradient(gradient));
+                return Ok(BgLayer::Gradient(SpecifiedBackgroundGradient::Linear(
+                    gradient,
+                )));
+            }
+        } else if name.eq_ignore_ascii_case("radial-gradient") {
+            if let Ok(gradient) = parse_radial_gradient_body(input) {
+                while input.next().is_ok() {}
+                return Ok(BgLayer::Gradient(SpecifiedBackgroundGradient::Radial(
+                    gradient,
+                )));
             }
         }
-        // `radial-gradient`/`conic-gradient`/`-webkit-*`や、対応外の
-        // `linear-gradient`(コーナー方向・length位置など)は読み飛ばす。
+        // `conic-gradient`/`-webkit-*`や、対応外の勾配(コーナー方向・length位置
+        // など)は読み飛ばす。
         while input.next().is_ok() {}
         Ok(BgLayer::Unsupported)
     })
@@ -2031,6 +2043,95 @@ fn parse_color_stop_list<'i>(
         }
     }
     Ok(stops)
+}
+
+/// `radial-gradient(...)`の中身(関数の括弧内)を解釈する。先頭の
+/// `[<shape>? <size>? [at <position>]?]`(いずれも省略可)を読み、続く色経由点
+/// リストを取る。形状(`circle`/`ellipse`)・サイズキーワード(`closest-side`等)や
+/// 明示サイズは受理するが、v1では半径を常に farthest-corner として描くため
+/// 値は捨てる。中心位置は`at <position>`から取り、省略時は中央`(0.5, 0.5)`。
+fn parse_radial_gradient_body<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<SpecifiedRadialGradient, ParseError<'i, ()>> {
+    // 先頭の設定部(存在すれば末尾にカンマがある)。無ければ経由点から直接始まる。
+    let center = input.try_parse(parse_radial_prelude).unwrap_or((0.5, 0.5));
+    let stops = parse_color_stop_list(input)?;
+    if stops.len() < 2 {
+        return Err(input.new_custom_error(()));
+    }
+    Ok(SpecifiedRadialGradient { center, stops })
+}
+
+/// `radial-gradient`の設定部`[<shape>? <size>? [at <position>]?] ,`。少なくとも
+/// 1要素を読み、末尾のカンマまで消費して中心`(x, y)`(0..1の分数)を返す。何も
+/// 読めなければ`Err`(=設定部なし、呼び出し側が経由点から解釈する)。
+fn parse_radial_prelude<'i>(input: &mut Parser<'i, '_>) -> Result<(f32, f32), ParseError<'i, ()>> {
+    let mut center = (0.5, 0.5);
+    let mut saw_something = false;
+
+    // 形状キーワード(円・楕円)。値は使わない。
+    if input
+        .try_parse(|input| {
+            let ident = input.expect_ident()?.clone();
+            match_ignore_ascii_case! { &ident,
+                "circle" | "ellipse" => Ok(()),
+                _ => Err(input.new_custom_error::<(), ()>(())),
+            }
+        })
+        .is_ok()
+    {
+        saw_something = true;
+    }
+
+    // サイズ(キーワードまたは明示 length/percentage)。複数トークン可、値は捨てる。
+    loop {
+        let consumed = input
+            .try_parse(|input| {
+                let ident = input.expect_ident()?.clone();
+                match_ignore_ascii_case! { &ident,
+                    "closest-side" | "closest-corner" | "farthest-side" | "farthest-corner" => {
+                        Ok(())
+                    },
+                    _ => Err(input.new_custom_error::<(), ()>(())),
+                }
+            })
+            .is_ok()
+            || input.try_parse(parse_length_percentage).is_ok();
+        if consumed {
+            saw_something = true;
+        } else {
+            break;
+        }
+    }
+
+    // `at <position>`。位置はパーセンテージ/キーワードを分数として取り出す。
+    if input
+        .try_parse(|input| input.expect_ident_matching("at"))
+        .is_ok()
+    {
+        let position = parse_background_position(input)?;
+        center = (
+            length_percentage_fraction(position.horizontal),
+            length_percentage_fraction(position.vertical),
+        );
+        saw_something = true;
+    }
+
+    if !saw_something {
+        return Err(input.new_custom_error(()));
+    }
+    input.expect_comma()?;
+    Ok(center)
+}
+
+/// `radial-gradient`の中心位置成分を0..1の分数へ。パーセンテージ/キーワードは
+/// そのまま割合になる。長さ(px等)は要素寸法に依存するためv1では中央(0.5)で
+/// 近似する。
+fn length_percentage_fraction(lp: SpecifiedLengthPercentage) -> f32 {
+    match lp {
+        SpecifiedLengthPercentage::Percentage(p) => p,
+        _ => 0.5,
+    }
 }
 
 /// `background-image`の簡易実装。`url(...)`1つのみ受け付ける
@@ -2189,7 +2290,7 @@ fn parse_background_clip<'i>(
 struct BgLayerSlots {
     color: Option<Color>,
     url: Option<String>,
-    gradient: Option<SpecifiedLinearGradient>,
+    gradient: Option<SpecifiedBackgroundGradient>,
     position: Option<SpecifiedBackgroundPosition>,
     size: Option<SpecifiedBackgroundSize>,
     repeat: Option<BackgroundRepeat>,

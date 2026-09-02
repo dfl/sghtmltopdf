@@ -20,8 +20,9 @@ mod values;
 pub use cascade::matching_declarations;
 pub use computed::{
     compute_single_element_style, compute_styles, compute_styles_with_parent,
-    resolve_margin_box_content, ComputedBoxShadow, ComputedStyle, ComputedTextShadow,
-    FirstLetterStyle, GradientStop, LineHeight, LinearGradient, RgbaColor,
+    resolve_margin_box_content, BackgroundGradient, ComputedBoxShadow, ComputedStyle,
+    ComputedTextShadow, FirstLetterStyle, GradientStop, LineHeight, LinearGradient, RadialGradient,
+    RgbaColor,
 };
 pub use element_ref::ElementRef;
 pub use extract::extract_author_stylesheet;

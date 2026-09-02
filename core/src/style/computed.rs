@@ -23,11 +23,11 @@ use super::values::{
     EmphasisPosition, EmphasisStyle, EmptyCells, FlexBasis, FlexDirection, FlexWrap, Float,
     FontStyle, FontWeight, GridArea, GridAutoFlow, GridLine, Hyphens, JustifyContent, Length,
     LengthPercentage, LengthPercentageOrAuto, ListStylePosition, ListStyleType, MaxSize, ObjectFit,
-    Overflow, OverflowWrap, Position, QuotePair, SpecifiedCornerRadius, SpecifiedLength,
-    SpecifiedLengthPercentage, SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight,
-    SpecifiedLinearGradient, SpecifiedMaxSize, SpecifiedTrackSize, TableLayout, TextAlign,
-    TextDecorationLine, TextOverflow, TextTransform, TrackList, TrackSize, TransformFunction,
-    VerticalAlign, Visibility, WhiteSpace, WordBreak, ZIndex,
+    Overflow, OverflowWrap, Position, QuotePair, SpecifiedBackgroundGradient,
+    SpecifiedCornerRadius, SpecifiedLength, SpecifiedLengthPercentage,
+    SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight, SpecifiedMaxSize, SpecifiedTrackSize,
+    TableLayout, TextAlign, TextDecorationLine, TextOverflow, TextTransform, TrackList, TrackSize,
+    TransformFunction, VerticalAlign, Visibility, WhiteSpace, WordBreak, ZIndex,
 };
 
 /// `color`/`background-color`の計算値。パース時と異なり`currentcolor`は解決済み。
@@ -63,6 +63,23 @@ pub struct LinearGradient {
 pub struct GradientStop {
     pub color: RgbaColor,
     pub position: Option<f32>,
+}
+
+/// `radial-gradient()`の計算値。中心は0..1の分数`(x, y)`で、色経由点は
+/// `currentcolor`解決済み。半径(farthest-corner)は要素の寸法に依存するため
+/// 描画側で計算する。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RadialGradient {
+    pub center: (f32, f32),
+    pub stops: Vec<GradientStop>,
+}
+
+/// 背景勾配1層の計算値。CSS順(手前→奥)を保つため`linear`/`radial`を同じ列に
+/// 混在させて持つ。
+#[derive(Debug, Clone, PartialEq)]
+pub enum BackgroundGradient {
+    Linear(LinearGradient),
+    Radial(RadialGradient),
 }
 
 /// `line-height`の計算値。CSS2.1 §10.8.1: `<number>`/`<percentage>`の計算値は
@@ -133,10 +150,10 @@ pub struct ComputedStyle {
     pub background_color: RgbaColor,
     /// `url(...)`(生の値、解決は呼び出し側任せ)。非継承プロパティ、初期値`None`。
     pub background_image: Option<String>,
-    /// `background-image`の`linear-gradient()`層(手前→奥のCSS順)。非継承
-    /// プロパティ、初期値は空。`radial-gradient`など未対応の層はパース側で
-    /// 読み飛ばすためここには入らない。
-    pub background_gradients: Vec<LinearGradient>,
+    /// `background-image`の勾配層(`linear-gradient()`/`radial-gradient()`、
+    /// 手前→奥のCSS順)。非継承プロパティ、初期値は空。`conic-gradient`など
+    /// 未対応の層はパース側で読み飛ばすためここには入らない。
+    pub background_gradients: Vec<BackgroundGradient>,
     /// 非継承プロパティ。
     pub background_position: BackgroundPosition,
     /// 非継承プロパティ。
@@ -861,7 +878,7 @@ fn compute_element_style(
     let mut color = None;
     let mut background_color = None;
     let mut background_image = None;
-    let mut background_gradients_spec: Vec<SpecifiedLinearGradient> = Vec::new();
+    let mut background_gradients_spec: Vec<SpecifiedBackgroundGradient> = Vec::new();
     let mut background_position = None;
     let mut background_size = None;
     let mut background_repeat = None;
@@ -1198,18 +1215,26 @@ fn compute_element_style(
     let resolved_color = resolve_color(color, inherited_color);
     // 各色経由点の`currentcolor`を、この要素の計算済み`color`で解決する
     // (`background-color`と同じ基準)。
-    let resolved_background_gradients: Vec<LinearGradient> = background_gradients_spec
+    let resolve_stops = |stops: &[crate::style::values::SpecifiedColorStop]| -> Vec<GradientStop> {
+        stops
+            .iter()
+            .map(|s| GradientStop {
+                color: resolve_color(Some(s.color), resolved_color),
+                position: s.position,
+            })
+            .collect()
+    };
+    let resolved_background_gradients: Vec<BackgroundGradient> = background_gradients_spec
         .iter()
-        .map(|g| LinearGradient {
-            angle_deg: g.angle_deg,
-            stops: g
-                .stops
-                .iter()
-                .map(|s| GradientStop {
-                    color: resolve_color(Some(s.color), resolved_color),
-                    position: s.position,
-                })
-                .collect(),
+        .map(|g| match g {
+            SpecifiedBackgroundGradient::Linear(l) => BackgroundGradient::Linear(LinearGradient {
+                angle_deg: l.angle_deg,
+                stops: resolve_stops(&l.stops),
+            }),
+            SpecifiedBackgroundGradient::Radial(r) => BackgroundGradient::Radial(RadialGradient {
+                center: r.center,
+                stops: resolve_stops(&r.stops),
+            }),
         })
         .collect();
     let resolved_background_color = match background_color {

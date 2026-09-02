@@ -997,6 +997,24 @@ pub struct SpecifiedColorStop {
     pub position: Option<f32>,
 }
 
+/// `radial-gradient()`の指定値。中心位置は0..1の分数`(x, y)`(既定は中央
+/// `(0.5, 0.5)`)。形状・サイズはv1では`circle`/`farthest-corner`固定として扱い
+/// (キーワードはパースするが半径計算は常にfarthest-corner)、色は`currentcolor`
+/// 未解決のまま(解決は計算スタイルの役割)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpecifiedRadialGradient {
+    pub center: (f32, f32),
+    pub stops: Vec<SpecifiedColorStop>,
+}
+
+/// `background-image`/`background`の1層の勾配指定値。描画順(手前→奥のCSS順)を
+/// 保つため、`linear`/`radial`を同じ列に混在させて持つ。
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpecifiedBackgroundGradient {
+    Linear(SpecifiedLinearGradient),
+    Radial(SpecifiedRadialGradient),
+}
+
 /// `object-fit`。`<img>`(置換要素)専用、非継承プロパティ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ObjectFit {
