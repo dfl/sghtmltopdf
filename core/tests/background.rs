@@ -233,9 +233,9 @@ fn a_multi_stop_linear_gradient_emits_an_axial_shading_end_to_end() {
 }
 
 #[test]
-fn an_unsupported_radial_layer_is_skipped_but_the_linear_base_still_paints() {
-    // 複数背景: 未対応の radial-gradient は層ごと読み飛ばし、linear の基層だけ
-    // シェーディングになる(宣言全体を捨てない)。
+fn a_radial_and_linear_layer_each_emit_their_shading() {
+    // 複数背景: radial-gradient は放射シェーディング(Type 3)、linear の基層は
+    // 軸シェーディング(Type 2)としてそれぞれ描かれる。
     let css = r#"body { margin: 0; }
        .box { width: 200px; height: 100px;
               background: radial-gradient(circle, #ffffff, #000000),
@@ -244,20 +244,61 @@ fn an_unsupported_radial_layer_is_skipped_but_the_linear_base_still_paints() {
     assert_eq!(
         count_occurrences(&bytes, b"/ShadingType 2"),
         1,
-        "only the linear base layer should emit a shading; the radial is skipped"
+        "the linear base layer emits an axial shading"
+    );
+    assert_eq!(
+        count_occurrences(&bytes, b"/ShadingType 3"),
+        1,
+        "the radial layer emits a radial shading"
     );
 }
 
 #[test]
-fn a_gradient_with_a_transparent_stop_is_not_painted() {
-    // alpha 付き(`transparent`)の層は今は描かない。宣言は有効だがシェーディングは出ない。
+fn a_radial_gradient_with_at_position_emits_a_radial_shading() {
+    let css = r#"body { margin: 0; }
+       .box { width: 200px; height: 100px;
+              background: radial-gradient(circle at 30% 20%, #ffffff 0%, #000000 50%); }"#;
+    let bytes = build_pdf(r#"<div class="box"></div>"#, css);
+    assert!(
+        count_occurrences(&bytes, b"/ShadingType 3") > 0,
+        "a radial-gradient with `at <position>` should emit a radial shading"
+    );
+}
+
+#[test]
+fn a_gradient_with_a_transparent_stop_now_paints_with_a_soft_mask() {
+    // alpha 付き(`transparent`)の層は、色シェーディングに加え輝度ソフトマスク
+    // (`/SMask /Luminosity`)を出して不透明度を変調する。
     let css = r#"body { margin: 0; }
        .box { width: 200px; height: 100px;
               background: linear-gradient(90deg, #ff0000 0%, transparent 100%); }"#;
     let bytes = build_pdf(r#"<div class="box"></div>"#, css);
-    assert_eq!(
-        count_occurrences(&bytes, b"/ShadingType 2"),
-        0,
-        "a gradient with an alpha stop should be skipped for now"
+    assert!(
+        count_occurrences(&bytes, b"/ShadingType 2") > 0,
+        "the color ramp should still be emitted as an axial shading"
     );
+    assert!(
+        count_occurrences(&bytes, b"/SMask") > 0,
+        "an alpha stop should now emit a soft mask"
+    );
+    assert!(
+        count_occurrences(&bytes, b"/Luminosity") > 0,
+        "the soft mask should be a luminosity mask"
+    );
+}
+
+#[test]
+fn a_radial_gradient_with_a_transparent_stop_emits_a_radial_shading_and_soft_mask() {
+    // カバーCSSの放射層と同じ形(中心色→transparent)。放射シェーディング
+    // (Type 3)と輝度ソフトマスクの両方が出る。
+    let css = r#"body { margin: 0; }
+       .box { width: 200px; height: 100px;
+              background: radial-gradient(circle at 30% 20%,
+                          rgba(138,97,255,0.3) 0%, transparent 50%); }"#;
+    let bytes = build_pdf(r#"<div class="box"></div>"#, css);
+    assert!(
+        count_occurrences(&bytes, b"/ShadingType 3") > 0,
+        "radial color ramp"
+    );
+    assert!(count_occurrences(&bytes, b"/SMask") > 0, "alpha soft mask");
 }
