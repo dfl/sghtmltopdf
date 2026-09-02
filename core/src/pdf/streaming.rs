@@ -29,8 +29,8 @@ use super::document::{
     alpha_gs_resource_name, collect_anchor_positions, collect_gradient_boxes, collect_image_uses,
     collect_link_areas, collect_margin_box_usage, collect_opacity_uses, collect_usage, render_box,
     render_header_footer_rules, render_margin_boxes, render_page_overlay, write_document_info,
-    write_gradient_shadings, write_link_annotation, write_resources, LinkSettings, PageOverlay,
-    RefAllocator, RenderTarget, ALPHA_STEPS,
+    write_gradient_shadings, write_link_annotation, write_resources, GradientResources,
+    LinkSettings, PageOverlay, RefAllocator, RenderTarget, ALPHA_STEPS,
 };
 use super::font::{deflate, embed_font_streaming_chunks, FontIds, FontUsage};
 use super::img::{embed_image_streaming_chunks, ids_for_image, ImageIds, PreparedImage};
@@ -266,9 +266,8 @@ impl<S: Sink> StreamingPdfWriter<S> {
         for b in &page.boxes {
             collect_gradient_boxes(b, styles, &self.settings, &mut gradient_boxes);
         }
-        let (gradient_shadings, gradient_objects) =
-            write_gradient_shadings(&gradient_boxes, &mut self.alloc);
-        for (id, chunk) in &gradient_objects {
+        let gradients = write_gradient_shadings(&gradient_boxes, &self.settings, &mut self.alloc);
+        for (id, chunk) in &gradients.objects {
             self.write_chunk(*id, chunk)?;
         }
 
@@ -416,7 +415,7 @@ impl<S: Sink> StreamingPdfWriter<S> {
                 &form_refs,
                 &self.alpha_gs_names,
                 &self.alpha_gs_ids,
-                &gradient_shadings,
+                &gradients,
             );
         }
         self.write_chunk(page_id, &chunk)?;
@@ -443,7 +442,7 @@ impl<S: Sink> StreamingPdfWriter<S> {
                     &self.alpha_gs_names,
                     &self.alpha_gs_ids,
                     // opacityで包んだサブツリー内の勾配は現状未対応(空)。
-                    &[],
+                    &GradientResources::default(),
                 );
             }
             self.write_chunk(*form_ref, &chunk)?;
