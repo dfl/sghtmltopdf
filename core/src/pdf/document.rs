@@ -260,9 +260,8 @@ pub fn encode_pdf_with_options(
         for b in &page.boxes {
             collect_gradient_boxes(b, styles, settings, &mut gradient_boxes);
         }
-        let (gradient_shadings, gradient_objects) =
-            write_gradient_shadings(&gradient_boxes, &mut alloc);
-        for (_id, chunk) in &gradient_objects {
+        let gradients = write_gradient_shadings(&gradient_boxes, settings, &mut alloc);
+        for (_id, chunk) in &gradients.objects {
             pdf.extend(chunk);
         }
 
@@ -344,7 +343,7 @@ pub fn encode_pdf_with_options(
             &form_refs,
             &alpha_gs_names,
             &alpha_gs_ids,
-            &gradient_shadings,
+            &gradients,
         );
         p.finish();
 
@@ -381,7 +380,7 @@ pub fn encode_pdf_with_options(
                 &alpha_gs_names,
                 &alpha_gs_ids,
                 // opacityで包んだサブツリー内の勾配は現状未対応(空)。
-                &[],
+                &GradientResources::default(),
             );
         }
     }
@@ -574,7 +573,7 @@ pub(super) fn write_resources(
     form_refs: &[Ref],
     alpha_gs_names: &[String],
     alpha_gs_ids: &[Ref],
-    gradient_shadings: &[(String, Ref)],
+    gradients: &GradientResources,
 ) {
     let mut font_dict = resources.fonts();
     for (name, ids) in font_resource_names.iter().zip(font_ids.iter()) {
@@ -588,15 +587,23 @@ pub(super) fn write_resources(
     for &form_ref in form_refs {
         xobject_dict.pair(Name(form_resource_name(form_ref).as_bytes()), form_ref);
     }
+    // alpha勾配の輝度マスクForm XObject。
+    for (name, id) in &gradients.mask_forms {
+        xobject_dict.pair(Name(name.as_bytes()), *id);
+    }
     xobject_dict.finish();
     let mut ext_g_state_dict = resources.ext_g_states();
     for (name, &id) in alpha_gs_names.iter().zip(alpha_gs_ids.iter()) {
         ext_g_state_dict.pair(Name(name.as_bytes()), id);
     }
+    // alpha勾配の`/SMask`付き ExtGState。
+    for (name, id) in &gradients.ext_gstates {
+        ext_g_state_dict.pair(Name(name.as_bytes()), *id);
+    }
     ext_g_state_dict.finish();
-    if !gradient_shadings.is_empty() {
+    if !gradients.shadings.is_empty() {
         let mut shading_dict = resources.shadings();
-        for (name, id) in gradient_shadings {
+        for (name, id) in &gradients.shadings {
             shading_dict.pair(Name(name.as_bytes()), *id);
         }
         shading_dict.finish();
@@ -808,25 +815,42 @@ pub(super) fn collect_gradient_boxes(
     }
 }
 
-/// 集めた勾配層のシェーディング/関数オブジェクトを書き出し、リソース登録用の
-/// `(名前, シェーディングRef)`の列を返す。各オブジェクトは独立`Chunk`なので、
-/// `write` は呼び出し側が渡す(バッチは`pdf.extend`、ストリーミングは
-/// `write_chunk`)。名前は[`gradient::shading_name`]で収集側・描画側が一致する。
-#[allow(clippy::type_complexity)]
+/// 勾配層が払い出したリソースの登録情報とオブジェクト列。色シェーディングは
+/// `/Shading`へ、alpha層の ExtGState は`/ExtGState`へ、マスクForm XObject は
+/// `/XObject`へそれぞれ登録する。
+#[derive(Default)]
+pub(super) struct GradientResources {
+    pub shadings: Vec<(String, Ref)>,
+    pub ext_gstates: Vec<(String, Ref)>,
+    pub mask_forms: Vec<(String, Ref)>,
+    pub objects: Vec<(Ref, Chunk)>,
+}
+
+/// 集めた勾配層のシェーディング/関数/(alpha層は)輝度マスク一式を書き出し、
+/// リソース登録用の名前とRefを返す。各オブジェクトは独立`Chunk`なので、`write`は
+/// 呼び出し側が渡す(バッチは`pdf.extend`、ストリーミングは`write_chunk`)。名前は
+/// [`gradient::shading_name`]等で収集側・描画側が一致する。
 pub(super) fn write_gradient_shadings(
     gradient_boxes: &[(usize, Vec<gradient::GradientLayer>)],
+    settings: &PageSettings,
     alloc: &mut RefAllocator,
-) -> (Vec<(String, Ref)>, Vec<(Ref, Chunk)>) {
-    let mut shadings = Vec::new();
-    let mut objects = Vec::new();
+) -> GradientResources {
+    let mut out = GradientResources::default();
     for (node_index, layers) in gradient_boxes {
         for (i, layer) in layers.iter().enumerate() {
-            let (shading_ref, objs) = gradient::write_layer_objects(layer, &mut || alloc.next());
-            objects.extend(objs);
-            shadings.push((gradient::shading_name(*node_index, i), shading_ref));
+            let result = gradient::write_layer_objects(layer, settings, &mut || alloc.next());
+            out.objects.extend(result.objects);
+            out.shadings
+                .push((gradient::shading_name(*node_index, i), result.color_shading));
+            if let Some(alpha) = result.alpha {
+                out.ext_gstates
+                    .push((gradient::ext_gstate_name(*node_index, i), alpha.ext_gstate));
+                out.mask_forms
+                    .push((gradient::mask_form_name(*node_index, i), alpha.mask_form));
+            }
         }
     }
-    (shadings, objects)
+    out
 }
 
 /// リンク注釈の生成に必要な文書単位の設定。
@@ -1933,12 +1957,18 @@ fn render_background_gradients(
     if style.background_gradients.is_empty() {
         return;
     }
-    let layer_count = gradient::layers_for(style, border_box, settings).len();
+    let layers = gradient::layers_for(style, border_box, settings);
     let x = settings.margin.left + border_box.x;
     let y = to_pdf_y(settings, border_box.y + border_box.height);
-    for i in (0..layer_count).rev() {
+    for (i, layer) in layers.iter().enumerate().rev() {
         let name = gradient::shading_name(node.0, i);
         content.save_state();
+        // alpha層は`/SMask`付き ExtGState で不透明度を変調する。gsはクリップより
+        // 先に設定する(マスクは設定時のCTMで評価される)。
+        if layer.has_alpha() {
+            let gs_name = gradient::ext_gstate_name(node.0, i);
+            content.set_parameters(Name(gs_name.as_bytes()));
+        }
         content.rect(x, y, border_box.width, border_box.height);
         content.clip_nonzero();
         content.end_path();
