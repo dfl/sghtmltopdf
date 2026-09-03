@@ -354,7 +354,7 @@ fn decode_svg(bytes: &[u8]) -> Result<PreparedImage, ImageDecodeError> {
 /// premultiplied RGBA を straight(非乗算)RGBA へ戻す。`c_straight = c_pre * 255 / a`
 /// (四捨五入、255でクランプ)。完全透明画素の色は0にする。
 fn unpremultiply_rgba(rgba: &mut [u8]) {
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         let a = px[3] as u16;
         if a == 0 {
             px[0] = 0;
