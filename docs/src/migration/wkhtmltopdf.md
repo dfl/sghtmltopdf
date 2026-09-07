@@ -70,7 +70,7 @@ HTMLでヘッダーを作る場合も、HTMLのテキストとして`[page]`が�
 主なものは以下です。
 
 * JavaScript関連: `--enable-javascript`・`--javascript-delay`・`--run-script`・`--window-status`・`--debug-javascript`・`--stop-slow-scripts`(JS実行は設計上の非目標)
-* PDFアウトライン: `--outline`・`--outline-depth`・`--dump-outline`
+* PDFアウトライン(しおり埋め込み): `--outline`・`--outline-depth`(`--dump-outline`は対応。見出し一覧をXMLへ書き出す)
 * XSLT: `--xsl-style-sheet`・`--dump-default-toc-xsl`(目次は内蔵テンプレート + CSSで代替)
 * 画像の再エンコード: `--image-quality`・`--image-dpi`
 * ネットワーク: `--proxy`・`--cookie`・`--custom-header`・`--username`/`--password`・`--ssl-*`

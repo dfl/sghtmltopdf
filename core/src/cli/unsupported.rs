@@ -25,13 +25,13 @@ const REASONS: &[Reason] = &[
         ],
     },
     Reason {
-        message: "PDFのアウトライン(ブックマーク)は未対応です。\n  \
-                  文書内の見出し一覧が必要な場合は --toc で目次ページを作れます",
+        message: "PDFのアウトライン(しおり)埋め込みは未対応です。\n  \
+                  見出し一覧が必要な場合は、--dump-outline でXMLに書き出すか、\n  \
+                  --toc で目次ページを作れます",
         options: &[
             "--outline",
             "--no-outline",
             "--outline-depth",
-            "--dump-outline",
             "--exclude-from-outline",
             "--include-in-outline",
         ],

@@ -377,6 +377,12 @@ pub struct ConvertArgs {
     #[arg(long, value_name = "OFFSET", default_value_t = 0)]
     pub page_offset: usize,
 
+    /// Write the list of headings, with their final page numbers, as XML to this file
+    /// (wkhtmltopdf-compatible: it produces no table-of-contents page, just a
+    /// machine-readable list).
+    #[arg(long, value_name = "PATH")]
+    pub dump_outline: Option<PathBuf>,
+
     /// 各ページ上部へ合成するHTML(プレースホルダ展開後にレンダリングする)
     #[arg(long, value_name = "PATH")]
     pub header_html: Option<PathBuf>,
