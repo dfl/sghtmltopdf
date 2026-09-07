@@ -207,3 +207,99 @@ fn all_background_details_combined_render_a_valid_pdf_end_to_end() {
     let bytes = build_pdf(html_src, &css);
     assert!(count_occurrences(&bytes, b"%%EOF") > 0);
 }
+
+#[test]
+fn a_multi_stop_linear_gradient_emits_an_axial_shading_end_to_end() {
+    // 3 stops -> an axial shading (Type 2) whose two exponential functions are joined by
+    // a stitching function (Type 3).
+    let css = r#"body { margin: 0; }
+       .box { width: 200px; height: 100px;
+              background: linear-gradient(90deg, #ff0000 0%, #00ff00 50%, #0000ff 100%); }"#;
+    let bytes = build_pdf(r#"<div class="box"></div>"#, css);
+
+    assert!(
+        count_occurrences(&bytes, b"/ShadingType 2") > 0,
+        "an axial shading object should be written"
+    );
+    assert!(
+        count_occurrences(&bytes, b"/FunctionType 3") > 0,
+        "3+ stops should stitch exponential functions"
+    );
+    // The content stream side paints by referencing the named shading.
+    let content = decompressed_stream_bytes(&bytes);
+    assert!(
+        count_occurrences(&content, b"/Gsh") > 0,
+        "the content stream should reference the gradient shading resource"
+    );
+}
+
+#[test]
+fn a_radial_and_linear_layer_each_emit_their_shading() {
+    // Multiple backgrounds: the radial-gradient is drawn as a radial shading (Type 3) and
+    // the linear base layer as an axial shading (Type 2).
+    let css = r#"body { margin: 0; }
+       .box { width: 200px; height: 100px;
+              background: radial-gradient(circle, #ffffff, #000000),
+                          linear-gradient(0deg, #123456, #abcdef); }"#;
+    let bytes = build_pdf(r#"<div class="box"></div>"#, css);
+    assert_eq!(
+        count_occurrences(&bytes, b"/ShadingType 2"),
+        1,
+        "the linear base layer emits an axial shading"
+    );
+    assert_eq!(
+        count_occurrences(&bytes, b"/ShadingType 3"),
+        1,
+        "the radial layer emits a radial shading"
+    );
+}
+
+#[test]
+fn a_radial_gradient_with_at_position_emits_a_radial_shading() {
+    let css = r#"body { margin: 0; }
+       .box { width: 200px; height: 100px;
+              background: radial-gradient(circle at 30% 20%, #ffffff 0%, #000000 50%); }"#;
+    let bytes = build_pdf(r#"<div class="box"></div>"#, css);
+    assert!(
+        count_occurrences(&bytes, b"/ShadingType 3") > 0,
+        "a radial-gradient with `at <position>` should emit a radial shading"
+    );
+}
+
+#[test]
+fn a_gradient_with_a_transparent_stop_now_paints_with_a_soft_mask() {
+    // A layer with alpha (`transparent`) emits, in addition to the color shading, a
+    // luminosity soft mask (`/SMask /Luminosity`) to modulate opacity.
+    let css = r#"body { margin: 0; }
+       .box { width: 200px; height: 100px;
+              background: linear-gradient(90deg, #ff0000 0%, transparent 100%); }"#;
+    let bytes = build_pdf(r#"<div class="box"></div>"#, css);
+    assert!(
+        count_occurrences(&bytes, b"/ShadingType 2") > 0,
+        "the color ramp should still be emitted as an axial shading"
+    );
+    assert!(
+        count_occurrences(&bytes, b"/SMask") > 0,
+        "an alpha stop should now emit a soft mask"
+    );
+    assert!(
+        count_occurrences(&bytes, b"/Luminosity") > 0,
+        "the soft mask should be a luminosity mask"
+    );
+}
+
+#[test]
+fn a_radial_gradient_with_a_transparent_stop_emits_a_radial_shading_and_soft_mask() {
+    // The same shape as the radial layer in cover CSS (center color -> transparent). Both
+    // a radial shading (Type 3) and a luminosity soft mask are emitted.
+    let css = r#"body { margin: 0; }
+       .box { width: 200px; height: 100px;
+              background: radial-gradient(circle at 30% 20%,
+                          rgba(138,97,255,0.3) 0%, transparent 50%); }"#;
+    let bytes = build_pdf(r#"<div class="box"></div>"#, css);
+    assert!(
+        count_occurrences(&bytes, b"/ShadingType 3") > 0,
+        "radial color ramp"
+    );
+    assert!(count_occurrences(&bytes, b"/SMask") > 0, "alpha soft mask");
+}

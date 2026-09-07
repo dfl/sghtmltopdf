@@ -984,6 +984,45 @@ pub enum Color {
     },
 }
 
+/// The specified value of `linear-gradient()`. The angle is kept in degrees following
+/// the CSS convention (`0deg` = up, increasing clockwise). Colors are left with
+/// `currentcolor` unresolved (resolution is the computed style's job). Unsupported layers
+/// such as `radial-gradient` do not appear here (they are skipped on the parse side).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpecifiedLinearGradient {
+    pub angle_deg: f32,
+    pub stops: Vec<SpecifiedColorStop>,
+}
+
+/// A single color stop of `linear-gradient()`. The position is optional (`None` is filled
+/// in evenly from the surrounding stops after parsing). The position is a 0..1 fraction
+/// (percentage).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpecifiedColorStop {
+    pub color: Color,
+    pub position: Option<f32>,
+}
+
+/// The specified value of `radial-gradient()`. The center is a 0..1 fraction `(x, y)`
+/// (default is the center `(0.5, 0.5)`). In v1 the shape and size are treated as fixed
+/// `circle`/`farthest-corner` (the keywords are parsed but the radius is always computed
+/// as farthest-corner), and colors are left with `currentcolor` unresolved (resolution is
+/// the computed style's job).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpecifiedRadialGradient {
+    pub center: (f32, f32),
+    pub stops: Vec<SpecifiedColorStop>,
+}
+
+/// The specified gradient value for one `background-image`/`background` layer. To
+/// preserve draw order (CSS order, front to back), `linear`/`radial` are held mixed in
+/// the same list.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SpecifiedBackgroundGradient {
+    Linear(SpecifiedLinearGradient),
+    Radial(SpecifiedRadialGradient),
+}
+
 /// `object-fit`。`<img>`(置換要素)専用、非継承プロパティ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ObjectFit {
