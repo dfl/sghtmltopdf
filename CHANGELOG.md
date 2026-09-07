@@ -36,6 +36,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `after_initialize` because the pipeline fills `config.assets.paths` in an initializer of
   its own, which runs after the one this gem adds.
 
+### Added
+
+- Paint `linear-gradient()` backgrounds as native PDF axial shadings. `background-image` and
+  the `background` shorthand now accept `linear-gradient(...)` (direction as an `<angle>` or a
+  single-side `to <side>` keyword; opaque colour stops with optional percentage positions,
+  distributed the CSS way) and a comma-separated list of layers. Each gradient becomes a
+  DeviceRGB axial shading (`ShadingType 2`) with an exponential/stitching colour ramp, clipped
+  to the border-box. Colour stops resolve `currentcolor`. Not yet painted (the layer is skipped
+  without invalidating the declaration): `conic-gradient`, corner directions (`to top right`),
+  and gradients inside an `opacity < 1` subtree.
+
+- Paint `radial-gradient()` backgrounds and gradients with alpha colour stops. A `circle`/
+  `ellipse` shape and size keywords are parsed; the centre from `at <position>` is honoured and
+  the radius is drawn farthest-corner, becoming a radial shading (`ShadingType 3`). Colour stops
+  with alpha — including `transparent` and `rgba(...)` below full opacity — render through a
+  DeviceGray luminosity soft mask, so partially-transparent gradients show what is behind them.
+
 ### Fixed
 
 - Read a `src` (or `url()`, or `href`) written as a filesystem path instead of joining it

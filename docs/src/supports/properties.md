@@ -112,9 +112,9 @@
 
 | プロパティ | 対応 | 備考 |
 | - | - | - |
-| `background`(ショートハンド) | ⚠️ | `<color>`/`<image>`/`<repeat>`/`<attachment>`/`<position>[ / <size>]`を任意順で受け付ける。指定しなかったロングハンドは仕様通り初期値へリセットされる。`background-clip`/`-origin`(`padding-box`等のキーワード)を含むとパースエラーになり宣言ごと無視される点に注意 |
+| `background`(ショートハンド) | ⚠️ | `<color>`/`<image>`/`<repeat>`/`<attachment>`/`<position>[ / <size>]`を任意順で受け付け、カンマ区切りの複数背景にも対応する(`<image>`は`url()`/`linear-gradient()`)。指定しなかったロングハンドは仕様通り初期値へリセットされる。`background-clip`/`-origin`(`padding-box`等のキーワード)を含むとパースエラーになり宣言ごと無視される点に注意 |
 | `background-color` | ✅ | アルファ付きの色はExtGStateで透過描画 |
-| `background-image` | ⚠️ | `none \| url(...)`のみ。`linear-gradient()`等のグラデーション関数、カンマ区切りの複数背景は非対応。既定ではintrinsicサイズでタイル配置 |
+| `background-image` | ⚠️ | `none \| url(...) \| linear-gradient(...)`とそれらのカンマ区切りの複数背景に対応。`linear-gradient`は`<angle>`または`to <side>`(単一辺)方向の不透明な色経由点をPDFの軸シェーディングとして描く。alpha付き経由点(`transparent`含む)の層、`radial-gradient`/`conic-gradient`/コーナー方向は非対応で、その層は読み飛ばす(宣言全体は捨てない)。`url()`は既定ではintrinsicサイズでタイル配置 |
 | `background-position` | ✅ | キーワード(`left`/`center`/`right`/`top`/`bottom`)と長さ/パーセンテージの1〜2値。3〜4値構文(`right 10px bottom 20px`)は非対応 |
 | `background-size` | ✅ | `cover`/`contain`/`<length-percentage> \| auto`の1〜2値 |
 | `background-repeat` | ⚠️ | `repeat`/`repeat-x`/`repeat-y`/`no-repeat`。CSS3の`round`/`space`、2値構文は非対応 |

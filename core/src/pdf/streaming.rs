@@ -26,10 +26,11 @@ use crate::sink::Sink;
 use crate::style::{ComputedStyle, PageRule};
 
 use super::document::{
-    alpha_gs_resource_name, collect_anchor_positions, collect_image_uses, collect_link_areas,
-    collect_margin_box_usage, collect_opacity_uses, collect_usage, file_identifier, render_box,
-    render_header_footer_rules, render_margin_boxes, render_page_overlay, write_document_info,
-    write_link_annotation, write_resources, LinkSettings, PageOverlay, RefAllocator, RenderTarget,
+    alpha_gs_resource_name, collect_anchor_positions, collect_gradient_boxes, collect_image_uses,
+    collect_link_areas, collect_margin_box_usage, collect_opacity_uses, collect_usage,
+    file_identifier, render_box, render_header_footer_rules, render_margin_boxes,
+    render_page_overlay, write_document_info, write_gradient_shadings, write_link_annotation,
+    write_resources, GradientResources, LinkSettings, PageOverlay, RefAllocator, RenderTarget,
     ALPHA_STEPS,
 };
 use super::font::{deflate, embed_font_streaming_chunks, FontIds, FontUsage};
@@ -278,6 +279,17 @@ impl<S: Sink> StreamingPdfWriter<S> {
             page_image_refs.push(root);
         }
 
+        // Emit and write the shading objects for `linear-gradient()` backgrounds
+        // (same as batch mode).
+        let mut gradient_boxes = Vec::new();
+        for b in &page.boxes {
+            collect_gradient_boxes(b, styles, &self.settings, &mut gradient_boxes);
+        }
+        let gradients = write_gradient_shadings(&gradient_boxes, &self.settings, &mut self.alloc);
+        for (id, chunk) in &gradients.objects {
+            self.write_chunk(*id, chunk)?;
+        }
+
         // `opacity < 1`の要素を先に集めてRefを払い出す(バッチモード
         // `encode_pdf`と同じ構造)。
         let mut opacity_nodes = Vec::new();
@@ -422,6 +434,7 @@ impl<S: Sink> StreamingPdfWriter<S> {
                 &form_refs,
                 &self.alpha_gs_names,
                 &self.alpha_gs_ids,
+                &gradients,
             );
         }
         self.write_chunk(page_id, &chunk)?;
@@ -447,6 +460,8 @@ impl<S: Sink> StreamingPdfWriter<S> {
                     &form_refs,
                     &self.alpha_gs_names,
                     &self.alpha_gs_ids,
+                    // Gradients inside an opacity-wrapped subtree are not supported yet (empty).
+                    &GradientResources::default(),
                 );
             }
             self.write_chunk(*form_ref, &chunk)?;

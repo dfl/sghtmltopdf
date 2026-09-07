@@ -11,13 +11,14 @@ use super::values::{
     ContentPart, Display, EmphasisPosition, EmphasisShape, EmphasisStyle, EmptyCells,
     FlexDirection, FlexWrap, Float, FontStyle, FontWeight, GridArea, GridAutoFlow, GridLine,
     Hyphens, JustifyContent, ListStylePosition, ListStyleType, ObjectFit, Overflow, OverflowWrap,
-    Position, QuotePair, RepeatCount, SpecifiedBackgroundPosition, SpecifiedBackgroundSize,
-    SpecifiedBoxShadow, SpecifiedCalc, SpecifiedCornerRadius, SpecifiedFlexBasis, SpecifiedLength,
-    SpecifiedLengthPercentage, SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight,
-    SpecifiedMaxSize, SpecifiedSpacing, SpecifiedTextShadow, SpecifiedTrackBreadth,
-    SpecifiedTrackComponent, SpecifiedTrackList, SpecifiedTrackSize, SpecifiedTransformFunction,
-    SpecifiedVerticalAlign, TableLayout, TextAlign, TextDecorationLine, TextOverflow,
-    TextTransform, Visibility, WhiteSpace, WordBreak, ZIndex,
+    Position, QuotePair, RepeatCount, SpecifiedBackgroundGradient, SpecifiedBackgroundPosition,
+    SpecifiedBackgroundSize, SpecifiedBoxShadow, SpecifiedCalc, SpecifiedColorStop,
+    SpecifiedCornerRadius, SpecifiedFlexBasis, SpecifiedLength, SpecifiedLengthPercentage,
+    SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight, SpecifiedLinearGradient,
+    SpecifiedMaxSize, SpecifiedRadialGradient, SpecifiedSpacing, SpecifiedTextShadow,
+    SpecifiedTrackBreadth, SpecifiedTrackComponent, SpecifiedTrackList, SpecifiedTrackSize,
+    SpecifiedTransformFunction, SpecifiedVerticalAlign, TableLayout, TextAlign, TextDecorationLine,
+    TextOverflow, TextTransform, Visibility, WhiteSpace, WordBreak, ZIndex,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -67,6 +68,13 @@ pub enum PropertyDeclaration {
     /// `url(...)`(生の値、解決は呼び出し側任せ、`FontFaceSource::Url`と
     /// 同じ方針)。`None`は`none`(背景画像なし)を表す。
     BackgroundImage(Option<String>),
+    /// The gradient layers of `background-image`/`background` (`linear-gradient()`/
+    /// `radial-gradient()`, in CSS order front to back). Unsupported layers such as
+    /// `conic-gradient` are not included (they are skipped on the parse side). This is
+    /// always generated for a declaration that specifies `background-image`, left empty
+    /// if there are no gradients (so that re-specifying the same property reliably
+    /// overrides it).
+    BackgroundGradients(Vec<SpecifiedBackgroundGradient>),
     BackgroundPosition(SpecifiedBackgroundPosition),
     BackgroundSize(SpecifiedBackgroundSize),
     BackgroundRepeat(BackgroundRepeat),
@@ -258,7 +266,10 @@ pub fn parse_declaration<'i>(
         "font-style" => Ok(vec![D::FontStyle(parse_font_style(input)?)]),
         "color" => Ok(vec![D::Color(parse_color(input)?)]),
         "background-color" => Ok(vec![D::BackgroundColor(parse_color(input)?)]),
-        "background-image" => Ok(vec![D::BackgroundImage(parse_background_image(input)?)]),
+        "background-image" => {
+            let (url, gradients) = parse_background_image_value(input)?;
+            Ok(vec![D::BackgroundImage(url), D::BackgroundGradients(gradients)])
+        },
         "background-position" => {
             Ok(vec![D::BackgroundPosition(parse_background_position(input)?)])
         },
@@ -2106,8 +2117,242 @@ fn parse_quotes<'i>(
     Ok(Some(pairs))
 }
 
+/// One `background-image`/`background` layer. It parses `linear-gradient()` and
+/// `url()`/`none`, and treats unsupported functions such as `radial-gradient` as
+/// `Unsupported` (a layer that is not drawn) after skipping their contents. This
+/// distinction lets a comma-separated list of multiple backgrounds keep the drawable
+/// layers instead of discarding the whole declaration when an unsupported layer is
+/// present.
+enum BgLayer {
+    None,
+    Url(String),
+    Gradient(SpecifiedBackgroundGradient),
+    Unsupported,
+}
+
+/// Parse a comma-separated background-image list one layer at a time. For `url` the last
+/// one specified wins, and gradients (`linear`/`radial`) are collected in CSS order
+/// (front to back). `none`/unsupported layers are discarded.
+fn parse_background_image_value<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<(Option<String>, Vec<SpecifiedBackgroundGradient>), ParseError<'i, ()>> {
+    let mut url = None;
+    let mut gradients = Vec::new();
+    for layer in input.parse_comma_separated(parse_background_image_layer)? {
+        match layer {
+            BgLayer::Url(u) => url = Some(u),
+            BgLayer::Gradient(g) => gradients.push(g),
+            BgLayer::None | BgLayer::Unsupported => {}
+        }
+    }
+    Ok((url, gradients))
+}
+
+/// A single background-image layer. `none` / `url()` / `linear-gradient()` /
+/// `radial-gradient()` / a (skipped) function.
+fn parse_background_image_layer<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<BgLayer, ParseError<'i, ()>> {
+    if input
+        .try_parse(|input| input.expect_ident_matching("none"))
+        .is_ok()
+    {
+        return Ok(BgLayer::None);
+    }
+    if let Ok(url) =
+        input.try_parse(|input| input.expect_url_or_string().map(|s| s.as_ref().to_string()))
+    {
+        return Ok(BgLayer::Url(url));
+    }
+    let name = match input.expect_function() {
+        Ok(name) => name.clone(),
+        Err(_) => return Err(input.new_custom_error(())),
+    };
+    input.parse_nested_block(|input| {
+        if name.eq_ignore_ascii_case("linear-gradient") {
+            if let Ok(gradient) = parse_linear_gradient_body(input) {
+                // Anything remaining after the stops is an unsupported form. Skip the
+                // contents and discard the whole layer.
+                while input.next().is_ok() {}
+                return Ok(BgLayer::Gradient(SpecifiedBackgroundGradient::Linear(
+                    gradient,
+                )));
+            }
+        } else if name.eq_ignore_ascii_case("radial-gradient") {
+            if let Ok(gradient) = parse_radial_gradient_body(input) {
+                while input.next().is_ok() {}
+                return Ok(BgLayer::Gradient(SpecifiedBackgroundGradient::Radial(
+                    gradient,
+                )));
+            }
+        }
+        // `conic-gradient`/`-webkit-*` and gradients that are not supported (corner
+        // directions, length positions, etc.) are skipped.
+        while input.next().is_ok() {}
+        Ok(BgLayer::Unsupported)
+    })
+}
+
+/// Parse the contents of `linear-gradient(...)` (inside the function's parentheses). The
+/// direction (an angle or `to <side>`) is optional and defaults to `to bottom` (180
+/// degrees).
+fn parse_linear_gradient_body<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<SpecifiedLinearGradient, ParseError<'i, ()>> {
+    let angle_deg = if let Ok(deg) = input.try_parse(parse_gradient_direction) {
+        input.expect_comma()?;
+        deg
+    } else {
+        180.0
+    };
+    let stops = parse_color_stop_list(input)?;
+    if stops.len() < 2 {
+        return Err(input.new_custom_error(()));
+    }
+    Ok(SpecifiedLinearGradient { angle_deg, stops })
+}
+
+/// The gradient direction. `<angle>`, or `to <side>` (single side only; corners are
+/// unsupported). The angle is returned in degrees following the CSS convention (`0deg` =
+/// up, clockwise).
+fn parse_gradient_direction<'i>(input: &mut Parser<'i, '_>) -> Result<f32, ParseError<'i, ()>> {
+    if let Ok(radians) = input.try_parse(parse_angle_radians) {
+        return Ok(radians.to_degrees());
+    }
+    input.expect_ident_matching("to")?;
+    let side = input.expect_ident()?.clone();
+    let angle = match_ignore_ascii_case! { &side,
+        "top" => 0.0,
+        "right" => 90.0,
+        "bottom" => 180.0,
+        "left" => 270.0,
+        _ => return Err(input.new_custom_error(())),
+    };
+    // Corners (`to top right`, etc.) depend on the element's dimensions and are
+    // unsupported. If a second side follows, error out so the whole layer is skipped.
+    if input
+        .try_parse(|input| input.expect_ident().map(|_| ()))
+        .is_ok()
+    {
+        return Err(input.new_custom_error(()));
+    }
+    Ok(angle)
+}
+
+/// A comma-separated list of color stops. Each stop is `<color> <percentage>?`. The
+/// position (a 0..1 fraction) is optional; when omitted, the draw side fills it in evenly
+/// from the surrounding stops.
+fn parse_color_stop_list<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<Vec<SpecifiedColorStop>, ParseError<'i, ()>> {
+    let mut stops = Vec::new();
+    loop {
+        let color = parse_color(input)?;
+        let position = input.try_parse(|input| input.expect_percentage()).ok();
+        stops.push(SpecifiedColorStop { color, position });
+        if input.try_parse(|input| input.expect_comma()).is_err() {
+            break;
+        }
+    }
+    Ok(stops)
+}
+
+/// Parse the contents of `radial-gradient(...)` (inside the function's parentheses). It
+/// reads the leading `[<shape>? <size>? [at <position>]?]` (all optional) and then the
+/// following color stop list. It accepts a shape (`circle`/`ellipse`), size keywords
+/// (`closest-side`, etc.) and explicit sizes, but discards those values since in v1 the
+/// radius is always drawn as farthest-corner. The center is taken from `at <position>`,
+/// defaulting to the center `(0.5, 0.5)` when omitted.
+fn parse_radial_gradient_body<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<SpecifiedRadialGradient, ParseError<'i, ()>> {
+    // The leading prelude (if present, it ends with a comma). If absent, the stops start
+    // directly.
+    let center = input.try_parse(parse_radial_prelude).unwrap_or((0.5, 0.5));
+    let stops = parse_color_stop_list(input)?;
+    if stops.len() < 2 {
+        return Err(input.new_custom_error(()));
+    }
+    Ok(SpecifiedRadialGradient { center, stops })
+}
+
+/// The `radial-gradient` prelude `[<shape>? <size>? [at <position>]?] ,`. It reads at
+/// least one element, consumes up to the trailing comma, and returns the center `(x, y)`
+/// (a 0..1 fraction). If nothing can be read, returns `Err` (meaning no prelude; the
+/// caller then parses from the stops).
+fn parse_radial_prelude<'i>(input: &mut Parser<'i, '_>) -> Result<(f32, f32), ParseError<'i, ()>> {
+    let mut center = (0.5, 0.5);
+    let mut saw_something = false;
+
+    // Shape keyword (circle/ellipse). The value is not used.
+    if input
+        .try_parse(|input| {
+            let ident = input.expect_ident()?.clone();
+            match_ignore_ascii_case! { &ident,
+                "circle" | "ellipse" => Ok(()),
+                _ => Err(input.new_custom_error::<(), ()>(())),
+            }
+        })
+        .is_ok()
+    {
+        saw_something = true;
+    }
+
+    // Size (a keyword or an explicit length/percentage). Multiple tokens allowed; the
+    // values are discarded.
+    loop {
+        let consumed = input
+            .try_parse(|input| {
+                let ident = input.expect_ident()?.clone();
+                match_ignore_ascii_case! { &ident,
+                    "closest-side" | "closest-corner" | "farthest-side" | "farthest-corner" => {
+                        Ok(())
+                    },
+                    _ => Err(input.new_custom_error::<(), ()>(())),
+                }
+            })
+            .is_ok()
+            || input.try_parse(parse_length_percentage).is_ok();
+        if consumed {
+            saw_something = true;
+        } else {
+            break;
+        }
+    }
+
+    // `at <position>`. The position takes percentages/keywords as fractions.
+    if input
+        .try_parse(|input| input.expect_ident_matching("at"))
+        .is_ok()
+    {
+        let position = parse_background_position(input)?;
+        center = (
+            length_percentage_fraction(position.horizontal),
+            length_percentage_fraction(position.vertical),
+        );
+        saw_something = true;
+    }
+
+    if !saw_something {
+        return Err(input.new_custom_error(()));
+    }
+    input.expect_comma()?;
+    Ok(center)
+}
+
+/// Convert a `radial-gradient` center position component to a 0..1 fraction.
+/// Percentages/keywords become the fraction directly. Lengths (px, etc.) depend on the
+/// element's dimensions, so in v1 they are approximated as the center (0.5).
+fn length_percentage_fraction(lp: SpecifiedLengthPercentage) -> f32 {
+    match lp {
+        SpecifiedLengthPercentage::Percentage(p) => p,
+        _ => 0.5,
+    }
+}
+
 /// `background-image`の簡易実装。`url(...)`1つのみ受け付ける
-/// (`linear-gradient()`等の非`url()`値、複数背景のカンマ区切りは非対応)。
+/// (`list-style-image`用。`background-image`本体は
+/// [`parse_background_image_value`]でグラデーションとカンマ区切りにも対応する)。
 /// `none`は「背景画像なし」を表す`None`として扱う。
 fn parse_background_image<'i>(
     input: &mut Parser<'i, '_>,
@@ -2243,58 +2488,114 @@ fn parse_background_attachment<'i>(
     })
 }
 
-/// `background`ショートハンドの簡易実装。
-/// `color`/`image`/`repeat`/`attachment`/`position`(`/`区切りで直後に`size`)
-/// を任意の順序で受け付ける(`border`ショートハンドと同じ「ループでどの種類の
-/// 値か`try_parse`で判定」方式)。仕様通り、指定されなかったロングハンドは全て
-/// 初期値へリセットする(`border`/`list-style`
-/// ショートハンドとは異なり、以前の宣言を引きずらない)。
-fn parse_background_shorthand<'i>(
-    input: &mut Parser<'i, '_>,
-) -> Result<Vec<PropertyDeclaration>, ParseError<'i, ()>> {
-    use PropertyDeclaration as D;
-    let mut color = None;
-    let mut image = None;
-    let mut repeat = None;
-    let mut attachment = None;
-    let mut position = None;
-    let mut size = None;
+/// The slots for one layer of the `background` shorthand. Each comma-separated layer is
+/// read into this form, and [`parse_background_shorthand`] combines them.
+#[derive(Default)]
+struct BgLayerSlots {
+    color: Option<Color>,
+    url: Option<String>,
+    gradient: Option<SpecifiedBackgroundGradient>,
+    position: Option<SpecifiedBackgroundPosition>,
+    size: Option<SpecifiedBackgroundSize>,
+    repeat: Option<BackgroundRepeat>,
+    attachment: Option<BackgroundAttachment>,
+}
 
+/// Read one layer of the `background` shorthand, determining the kind of each value with
+/// `try_parse` (the same approach as the `border` shorthand). The image slot accepts any
+/// of `url()`/`linear-gradient()`/`none`/an unsupported function; an unsupported function
+/// is skipped and leaves the layer empty.
+fn parse_background_layer_slots<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<BgLayerSlots, ParseError<'i, ()>> {
+    let mut slots = BgLayerSlots::default();
+    let mut image_seen = false;
     loop {
-        if position.is_none() {
+        if slots.position.is_none() {
             if let Ok(p) = input.try_parse(parse_background_position) {
-                position = Some(p);
+                slots.position = Some(p);
                 if input.try_parse(|input| input.expect_delim('/')).is_ok() {
-                    size = Some(parse_background_size(input)?);
+                    slots.size = Some(parse_background_size(input)?);
                 }
                 continue;
             }
         }
-        if repeat.is_none() {
+        if slots.repeat.is_none() {
             if let Ok(r) = input.try_parse(parse_background_repeat) {
-                repeat = Some(r);
+                slots.repeat = Some(r);
                 continue;
             }
         }
-        if attachment.is_none() {
+        if slots.attachment.is_none() {
             if let Ok(a) = input.try_parse(parse_background_attachment) {
-                attachment = Some(a);
+                slots.attachment = Some(a);
                 continue;
             }
         }
-        if image.is_none() {
-            if let Ok(img) = input.try_parse(parse_background_image) {
-                image = Some(img);
+        if !image_seen {
+            if let Ok(layer) = input.try_parse(parse_background_image_layer) {
+                image_seen = true;
+                match layer {
+                    BgLayer::Url(u) => slots.url = Some(u),
+                    BgLayer::Gradient(g) => slots.gradient = Some(g),
+                    BgLayer::None | BgLayer::Unsupported => {}
+                }
                 continue;
             }
         }
-        if color.is_none() {
+        if slots.color.is_none() {
             if let Ok(c) = input.try_parse(parse_color) {
-                color = Some(c);
+                slots.color = Some(c);
                 continue;
             }
         }
         break;
+    }
+    Ok(slots)
+}
+
+/// A simple implementation of the `background` shorthand.
+/// It accepts `color`/`image`/`repeat`/`attachment`/`position` (with `size` immediately
+/// after a `/` separator) in any order (the same "loop and determine the kind of value
+/// with `try_parse`" approach as the `border` shorthand). Per the spec, every longhand
+/// that is not specified is reset to its initial value (unlike the `border`/`list-style`
+/// shorthands, it does not carry over any previous declaration).
+fn parse_background_shorthand<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<Vec<PropertyDeclaration>, ParseError<'i, ()>> {
+    use PropertyDeclaration as D;
+    // Support comma-separated multiple backgrounds. Read each layer with
+    // [`parse_background_layer_slots`], take the last (front-most) specified value for
+    // `url`/color/position, and collect `linear-gradient` in CSS order (front to back).
+    // The single-layer case (no comma) behaves as before.
+    let layers = input.parse_comma_separated(parse_background_layer_slots)?;
+
+    let mut color = None;
+    let mut url = None;
+    let mut gradients = Vec::new();
+    let mut position = None;
+    let mut size = None;
+    let mut repeat = None;
+    let mut attachment = None;
+    for (i, layer) in layers.into_iter().enumerate() {
+        if let Some(c) = layer.color {
+            color = Some(c);
+        }
+        if let Some(u) = layer.url {
+            url = Some(u);
+        }
+        if let Some(g) = layer.gradient {
+            gradients.push(g);
+        }
+        // position/size/repeat/attachment can be held per layer, but for simplicity only
+        // the first layer's specification is reflected into the whole (sufficient for
+        // template usage).
+        if i == 0 {
+            position = layer.position;
+            size = layer.size;
+            repeat = layer.repeat;
+            attachment = layer.attachment;
+        }
     }
 
     Ok(vec![
@@ -2304,7 +2605,8 @@ fn parse_background_shorthand<'i>(
             blue: 0,
             alpha: 0.0,
         })),
-        D::BackgroundImage(image.unwrap_or(None)),
+        D::BackgroundImage(url),
+        D::BackgroundGradients(gradients),
         D::BackgroundPosition(position.unwrap_or(SpecifiedBackgroundPosition {
             horizontal: SpecifiedLengthPercentage::Percentage(0.0),
             vertical: SpecifiedLengthPercentage::Percentage(0.0),

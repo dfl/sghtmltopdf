@@ -2,6 +2,7 @@
 
 mod document;
 mod font;
+mod gradient;
 mod img;
 mod options;
 mod streaming;

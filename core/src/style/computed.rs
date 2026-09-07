@@ -23,11 +23,11 @@ use super::values::{
     EmphasisStyle, EmptyCells, FlexBasis, FlexDirection, FlexWrap, Float, FontStyle, FontWeight,
     GridArea, GridAutoFlow, GridLine, Hyphens, JustifyContent, Length, LengthPercentage,
     LengthPercentageOrAuto, ListStylePosition, ListStyleType, MaxSize, ObjectFit, Overflow,
-    OverflowWrap, Position, QuotePair, SpecifiedCornerRadius, SpecifiedLength,
-    SpecifiedLengthPercentage, SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight,
-    SpecifiedMaxSize, SpecifiedTrackSize, TableLayout, TextAlign, TextDecorationLine, TextOverflow,
-    TextTransform, TrackList, TrackSize, TransformFunction, VerticalAlign, Visibility, WhiteSpace,
-    WordBreak, ZIndex,
+    OverflowWrap, Position, QuotePair, SpecifiedBackgroundGradient, SpecifiedCornerRadius,
+    SpecifiedLength, SpecifiedLengthPercentage, SpecifiedLengthPercentageOrAuto,
+    SpecifiedLineHeight, SpecifiedMaxSize, SpecifiedTrackSize, TableLayout, TextAlign,
+    TextDecorationLine, TextOverflow, TextTransform, TrackList, TrackSize, TransformFunction,
+    VerticalAlign, Visibility, WhiteSpace, WordBreak, ZIndex,
 };
 
 /// `color`/`background-color`の計算値。パース時と異なり`currentcolor`は解決済み。
@@ -47,6 +47,42 @@ impl RgbaColor {
         blue: 0,
         alpha: 0.0,
     };
+}
+
+/// The computed value of `linear-gradient()`. The angle is kept in degrees following the
+/// CSS convention (`0deg` = up, clockwise), and the color stops have `currentcolor`
+/// already resolved. Filling in missing positions is done on the draw side (the layer
+/// coordinates depend on the element's dimensions, so they are not carried on the
+/// computed style).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinearGradient {
+    pub angle_deg: f32,
+    pub stops: Vec<GradientStop>,
+}
+
+/// The computed value of a `linear-gradient()` color stop. The position is a 0..1
+/// fraction, `None` if omitted.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientStop {
+    pub color: RgbaColor,
+    pub position: Option<f32>,
+}
+
+/// The computed value of `radial-gradient()`. The center is a 0..1 fraction `(x, y)`, and
+/// the color stops have `currentcolor` already resolved. The radius (farthest-corner)
+/// depends on the element's dimensions, so it is computed on the draw side.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RadialGradient {
+    pub center: (f32, f32),
+    pub stops: Vec<GradientStop>,
+}
+
+/// The computed value of one background gradient layer. To preserve CSS order (front to
+/// back), `linear`/`radial` are held mixed in the same list.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BackgroundGradient {
+    Linear(LinearGradient),
+    Radial(RadialGradient),
 }
 
 /// `line-height`の計算値。CSS2.1 §10.8.1: `<number>`/`<percentage>`の計算値は
@@ -117,6 +153,11 @@ pub struct ComputedStyle {
     pub background_color: RgbaColor,
     /// `url(...)`(生の値、解決は呼び出し側任せ)。非継承プロパティ、初期値`None`。
     pub background_image: Option<String>,
+    /// The gradient layers of `background-image` (`linear-gradient()`/`radial-gradient()`,
+    /// in CSS order front to back). Non-inherited property, initial value is empty.
+    /// Unsupported layers such as `conic-gradient` are skipped on the parse side, so they
+    /// do not appear here.
+    pub background_gradients: Vec<BackgroundGradient>,
     /// 非継承プロパティ。
     pub background_position: BackgroundPosition,
     /// 非継承プロパティ。
@@ -426,6 +467,7 @@ impl Default for ComputedStyle {
                 alpha: 0.0,
             },
             background_image: None,
+            background_gradients: Vec::new(),
             background_position: BackgroundPosition::default(),
             background_size: BackgroundSize::default(),
             background_repeat: BackgroundRepeat::default(),
@@ -836,6 +878,7 @@ fn compute_element_style(
     let mut color = None;
     let mut background_color = None;
     let mut background_image = None;
+    let mut background_gradients_spec: Vec<SpecifiedBackgroundGradient> = Vec::new();
     let mut background_position = None;
     let mut background_size = None;
     let mut background_repeat = None;
@@ -975,6 +1018,7 @@ fn compute_element_style(
             PropertyDeclaration::Color(v) => color = Some(*v),
             PropertyDeclaration::BackgroundColor(v) => background_color = Some(*v),
             PropertyDeclaration::BackgroundImage(v) => background_image = v.clone(),
+            PropertyDeclaration::BackgroundGradients(v) => background_gradients_spec = v.clone(),
             PropertyDeclaration::BackgroundPosition(v) => background_position = Some(*v),
             PropertyDeclaration::BackgroundSize(v) => background_size = Some(*v),
             PropertyDeclaration::BackgroundRepeat(v) => background_repeat = Some(*v),
@@ -1167,6 +1211,30 @@ fn compute_element_style(
         .unwrap_or(inherited_border_spacing_vertical);
 
     let resolved_color = resolve_color(color, inherited_color);
+    // Resolve each color stop's `currentcolor` against this element's computed `color`
+    // (the same basis as `background-color`).
+    let resolve_stops = |stops: &[crate::style::values::SpecifiedColorStop]| -> Vec<GradientStop> {
+        stops
+            .iter()
+            .map(|s| GradientStop {
+                color: resolve_color(Some(s.color), resolved_color),
+                position: s.position,
+            })
+            .collect()
+    };
+    let resolved_background_gradients: Vec<BackgroundGradient> = background_gradients_spec
+        .iter()
+        .map(|g| match g {
+            SpecifiedBackgroundGradient::Linear(l) => BackgroundGradient::Linear(LinearGradient {
+                angle_deg: l.angle_deg,
+                stops: resolve_stops(&l.stops),
+            }),
+            SpecifiedBackgroundGradient::Radial(r) => BackgroundGradient::Radial(RadialGradient {
+                center: r.center,
+                stops: resolve_stops(&r.stops),
+            }),
+        })
+        .collect();
     let resolved_background_color = match background_color {
         Some(Color::Rgba {
             red,
@@ -1387,6 +1455,7 @@ fn compute_element_style(
         color: resolved_color,
         background_color: resolved_background_color,
         background_image: background_image.or(initial.background_image),
+        background_gradients: resolved_background_gradients,
         background_position: resolved_background_position,
         background_size: resolved_background_size,
         background_repeat: background_repeat.unwrap_or(initial.background_repeat),
