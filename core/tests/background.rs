@@ -303,3 +303,35 @@ fn a_radial_gradient_with_a_transparent_stop_emits_a_radial_shading_and_soft_mas
     );
     assert!(count_occurrences(&bytes, b"/SMask") > 0, "alpha soft mask");
 }
+
+#[test]
+fn background_clip_text_fills_glyphs_with_the_gradient() {
+    // Gradient text: accumulate the text into the clip (Tr 7) and use `sh` to paint
+    // the axial shading into the glyphs. This is a clip fill rather than a
+    // rectangular background fill.
+    let css = r#"body { margin: 0; }
+       h1 { font-size: 40px;
+            background: linear-gradient(90deg, #ff0000, #0000ff);
+            -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent; color: transparent; }"#;
+    let bytes = build_pdf(r#"<h1>GOLD</h1>"#, css);
+
+    // The axial shading is emitted just like for a background gradient.
+    assert!(
+        count_occurrences(&bytes, b"/ShadingType 2") > 0,
+        "the gradient still emits an axial shading"
+    );
+
+    let content = decompressed_stream_bytes(&bytes);
+    // Accumulate the text in clip mode (7 Tr).
+    assert!(
+        count_occurrences(&content, b"7 Tr") > 0,
+        "glyphs should be added to the clip path (text rendering mode 7): {}",
+        String::from_utf8_lossy(&content)
+    );
+    // Paint the shading into the clip (named shading + sh).
+    assert!(
+        count_occurrences(&content, b"/Gsh") > 0 && count_occurrences(&content, b" sh") > 0,
+        "the gradient shading should be painted into the text clip"
+    );
+}

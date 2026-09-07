@@ -6,19 +6,19 @@ use palette::{FromColor, Lab, Lch, Oklab, Oklch, Srgb};
 use super::color_mix::{self, HueMethod, Space as ColorSpace};
 
 use super::values::{
-    AlignContent, AlignItems, AlignSelf, AspectRatio, BackgroundAttachment, BackgroundRepeat,
-    BorderCollapse, BorderStyle, BoxSizing, BreakBetween, BreakInside, CaptionSide, Clear, Color,
-    ContentPart, Display, EmphasisPosition, EmphasisShape, EmphasisStyle, EmptyCells,
-    FlexDirection, FlexWrap, Float, FontStyle, FontWeight, GridArea, GridAutoFlow, GridLine,
-    Hyphens, JustifyContent, ListStylePosition, ListStyleType, ObjectFit, Overflow, OverflowWrap,
-    Position, QuotePair, RepeatCount, SpecifiedBackgroundGradient, SpecifiedBackgroundPosition,
-    SpecifiedBackgroundSize, SpecifiedBoxShadow, SpecifiedCalc, SpecifiedColorStop,
-    SpecifiedCornerRadius, SpecifiedFlexBasis, SpecifiedLength, SpecifiedLengthPercentage,
-    SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight, SpecifiedLinearGradient,
-    SpecifiedMaxSize, SpecifiedRadialGradient, SpecifiedSpacing, SpecifiedTextShadow,
-    SpecifiedTrackBreadth, SpecifiedTrackComponent, SpecifiedTrackList, SpecifiedTrackSize,
-    SpecifiedTransformFunction, SpecifiedVerticalAlign, TableLayout, TextAlign, TextDecorationLine,
-    TextOverflow, TextTransform, Visibility, WhiteSpace, WordBreak, ZIndex,
+    AlignContent, AlignItems, AlignSelf, AspectRatio, BackgroundAttachment, BackgroundClip,
+    BackgroundRepeat, BorderCollapse, BorderStyle, BoxSizing, BreakBetween, BreakInside,
+    CaptionSide, Clear, Color, ContentPart, Display, EmphasisPosition, EmphasisShape,
+    EmphasisStyle, EmptyCells, FlexDirection, FlexWrap, Float, FontStyle, FontWeight, GridArea,
+    GridAutoFlow, GridLine, Hyphens, JustifyContent, ListStylePosition, ListStyleType, ObjectFit,
+    Overflow, OverflowWrap, Position, QuotePair, RepeatCount, SpecifiedBackgroundGradient,
+    SpecifiedBackgroundPosition, SpecifiedBackgroundSize, SpecifiedBoxShadow, SpecifiedCalc,
+    SpecifiedColorStop, SpecifiedCornerRadius, SpecifiedFlexBasis, SpecifiedLength,
+    SpecifiedLengthPercentage, SpecifiedLengthPercentageOrAuto, SpecifiedLineHeight,
+    SpecifiedLinearGradient, SpecifiedMaxSize, SpecifiedRadialGradient, SpecifiedSpacing,
+    SpecifiedTextShadow, SpecifiedTrackBreadth, SpecifiedTrackComponent, SpecifiedTrackList,
+    SpecifiedTrackSize, SpecifiedTransformFunction, SpecifiedVerticalAlign, TableLayout, TextAlign,
+    TextDecorationLine, TextOverflow, TextTransform, Visibility, WhiteSpace, WordBreak, ZIndex,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,6 +80,8 @@ pub enum PropertyDeclaration {
     BackgroundRepeat(BackgroundRepeat),
     /// `fixed`は`scroll`と同一視して描画する。
     BackgroundAttachment(BackgroundAttachment),
+    /// `background-clip` (including the `-webkit-` alias). `text` gives gradient text.
+    BackgroundClip(BackgroundClip),
     TextDecorationLine(TextDecorationLine),
     /// `::before`/`::after`/`::first-letter`用の`content`。`None`は
     /// `none`/`normal`(生成ボックスなし)。文字列リテラル・`attr`・
@@ -277,6 +279,11 @@ pub fn parse_declaration<'i>(
         "background-repeat" => Ok(vec![D::BackgroundRepeat(parse_background_repeat(input)?)]),
         "background-attachment" => {
             Ok(vec![D::BackgroundAttachment(parse_background_attachment(input)?)])
+        },
+        // `-webkit-background-clip` is widely used for gradient text
+        // (`background-clip: text`), so we accept it as an alias.
+        "background-clip" | "-webkit-background-clip" => {
+            Ok(vec![D::BackgroundClip(parse_background_clip(input)?)])
         },
         "background" => parse_background_shorthand(input),
         "text-decoration" | "text-decoration-line" => {
@@ -2484,6 +2491,18 @@ fn parse_background_attachment<'i>(
     Ok(match_ignore_ascii_case! { &ident,
         "scroll" => BackgroundAttachment::Scroll,
         "fixed" => BackgroundAttachment::Fixed,
+        _ => return Err(input.new_custom_error(())),
+    })
+}
+
+/// `background-clip`. Only `text` is special-cased; the box keywords fall back to the default.
+fn parse_background_clip<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<BackgroundClip, ParseError<'i, ()>> {
+    let ident = input.expect_ident()?.clone();
+    Ok(match_ignore_ascii_case! { &ident,
+        "text" => BackgroundClip::Text,
+        "border-box" | "padding-box" | "content-box" => BackgroundClip::BorderBox,
         _ => return Err(input.new_custom_error(())),
     })
 }
