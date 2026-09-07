@@ -49,33 +49,34 @@ impl RgbaColor {
     };
 }
 
-/// `linear-gradient()`の計算値。角度はCSSの慣習(`0deg`=上向き、時計回り)で
-/// 度のまま保持し、色経由点は`currentcolor`解決済み。位置の省略補完は描画側で
-/// 行う(層の座標は要素の寸法に依存するため計算スタイルには持たせない)。
+/// The computed value of `linear-gradient()`. The angle is kept in degrees following the CSS
+/// convention (`0deg`=up, clockwise), and the color stops have `currentcolor` resolved. Filling
+/// in omitted positions is done by the drawing side (the layer's coordinates depend on the
+/// element's dimensions, so they are not held on the computed style).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinearGradient {
     pub angle_deg: f32,
     pub stops: Vec<GradientStop>,
 }
 
-/// `linear-gradient()`の色経由点の計算値。位置は0..1の分数、省略時`None`。
+/// The computed value of a `linear-gradient()` color stop. The position is a 0..1 fraction, `None` if omitted.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GradientStop {
     pub color: RgbaColor,
     pub position: Option<f32>,
 }
 
-/// `radial-gradient()`の計算値。中心は0..1の分数`(x, y)`で、色経由点は
-/// `currentcolor`解決済み。半径(farthest-corner)は要素の寸法に依存するため
-/// 描画側で計算する。
+/// The computed value of `radial-gradient()`. The center is a 0..1 fraction `(x, y)`, and the
+/// color stops have `currentcolor` resolved. The radius (farthest-corner) depends on the
+/// element's dimensions, so it is computed by the drawing side.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RadialGradient {
     pub center: (f32, f32),
     pub stops: Vec<GradientStop>,
 }
 
-/// 背景勾配1層の計算値。CSS順(手前→奥)を保つため`linear`/`radial`を同じ列に
-/// 混在させて持つ。
+/// The computed value of one background-gradient layer. To preserve CSS order (front to back),
+/// `linear` and `radial` are held mixed together in the same list.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BackgroundGradient {
     Linear(LinearGradient),
@@ -150,9 +151,9 @@ pub struct ComputedStyle {
     pub background_color: RgbaColor,
     /// `url(...)`(生の値、解決は呼び出し側任せ)。非継承プロパティ、初期値`None`。
     pub background_image: Option<String>,
-    /// `background-image`の勾配層(`linear-gradient()`/`radial-gradient()`、
-    /// 手前→奥のCSS順)。非継承プロパティ、初期値は空。`conic-gradient`など
-    /// 未対応の層はパース側で読み飛ばすためここには入らない。
+    /// The gradient layers of `background-image` (`linear-gradient()`/`radial-gradient()`, in
+    /// CSS order front to back). Non-inherited property, initial value empty. Unsupported layers
+    /// such as `conic-gradient` are skipped by the parser, so they do not appear here.
     pub background_gradients: Vec<BackgroundGradient>,
     /// 非継承プロパティ。
     pub background_position: BackgroundPosition,
@@ -162,8 +163,8 @@ pub struct ComputedStyle {
     pub background_repeat: BackgroundRepeat,
     /// 非継承プロパティ。`fixed`は`scroll`と同一視して描画する。
     pub background_attachment: BackgroundAttachment,
-    /// 非継承プロパティ。`text`で背景をテキストのグリフでクリップする
-    /// (`linear-gradient`と併用したときのみ効果がある)。
+    /// Non-inherited property. `text` clips the background to the text's glyphs
+    /// (only has an effect when combined with `linear-gradient`).
     pub background_clip: BackgroundClip,
     /// `text-decoration-line`。仕様上は非継承プロパティだが、代わりに祖先の
     /// 装飾線が子孫のボックスへ「伝播」する特殊規則を持つ。この伝播を
@@ -1213,8 +1214,8 @@ fn compute_element_style(
         .unwrap_or(inherited_border_spacing_vertical);
 
     let resolved_color = resolve_color(color, inherited_color);
-    // 各色経由点の`currentcolor`を、この要素の計算済み`color`で解決する
-    // (`background-color`と同じ基準)。
+    // Resolve each color stop's `currentcolor` against this element's computed `color`
+    // (the same basis as `background-color`).
     let resolve_stops = |stops: &[crate::style::values::SpecifiedColorStop]| -> Vec<GradientStop> {
         stops
             .iter()
@@ -4715,13 +4716,13 @@ mod tests {
 
     #[test]
     fn viewport_units_resolve_against_the_page_box() {
-        // 印刷ではページbox(用紙サイズ)をビューポートとみなす。
+        // In print, the page box (paper size) is treated as the viewport.
         crate::style::set_viewport_px(800.0, 600.0);
         let dom = html::parse(br#"<div></div>"#);
         let div = find(&dom, dom.document(), "div").expect("div not found");
 
-        // 50vh は 600px の 50% = 300px、25vw は 800px の 25% = 200px。内部表現に
-        // 依存しないよう、等価な px 指定と一致することで確かめる。
+        // 50vh is 50% of 600px = 300px, 25vw is 25% of 800px = 200px. To avoid depending on the
+        // internal representation, verify by matching against the equivalent px specification.
         let vh = compute_styles(
             &dom,
             &Stylesheet::default(),
@@ -4735,7 +4736,7 @@ mod tests {
         assert_eq!(vh[&div].width, px[&div].width);
         assert_eq!(vh[&div].height, px[&div].height);
 
-        // vmin は短辺(600)、vmax は長辺(800)基準。
+        // vmin is relative to the shorter side (600), vmax to the longer side (800).
         let vminmax = compute_styles(
             &dom,
             &Stylesheet::default(),

@@ -279,8 +279,8 @@ impl<S: Sink> StreamingPdfWriter<S> {
             page_image_refs.push(root);
         }
 
-        // `linear-gradient()`背景のシェーディングオブジェクトを払い出して書く
-        // (バッチモードと同じ)。
+        // Allocate and write the shading objects for `linear-gradient()` backgrounds
+        // (same as batch mode).
         let mut gradient_boxes = Vec::new();
         for b in &page.boxes {
             collect_gradient_boxes(b, styles, &self.settings, &mut gradient_boxes);
@@ -460,7 +460,7 @@ impl<S: Sink> StreamingPdfWriter<S> {
                     &form_refs,
                     &self.alpha_gs_names,
                     &self.alpha_gs_ids,
-                    // opacityで包んだサブツリー内の勾配は現状未対応(空)。
+                    // Gradients inside an opacity-wrapped subtree are not supported yet (empty).
                     &GradientResources::default(),
                 );
             }

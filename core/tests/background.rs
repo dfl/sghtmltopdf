@@ -210,7 +210,7 @@ fn all_background_details_combined_render_a_valid_pdf_end_to_end() {
 
 #[test]
 fn a_multi_stop_linear_gradient_emits_an_axial_shading_end_to_end() {
-    // 3経由点 → 指数関数2つを stitching(Type 3)で繋いだ軸シェーディング(Type 2)。
+    // 3 stops -> an axial shading (Type 2) with two exponential functions joined by stitching (Type 3).
     let css = r#"body { margin: 0; }
        .box { width: 200px; height: 100px;
               background: linear-gradient(90deg, #ff0000 0%, #00ff00 50%, #0000ff 100%); }"#;
@@ -224,7 +224,7 @@ fn a_multi_stop_linear_gradient_emits_an_axial_shading_end_to_end() {
         count_occurrences(&bytes, b"/FunctionType 3") > 0,
         "3+ stops should stitch exponential functions"
     );
-    // content stream 側では名前付きシェーディングを参照して塗る。
+    // The content stream side paints by referencing the named shading.
     let content = decompressed_stream_bytes(&bytes);
     assert!(
         count_occurrences(&content, b"/Gsh") > 0,
@@ -234,8 +234,8 @@ fn a_multi_stop_linear_gradient_emits_an_axial_shading_end_to_end() {
 
 #[test]
 fn a_radial_and_linear_layer_each_emit_their_shading() {
-    // 複数背景: radial-gradient は放射シェーディング(Type 3)、linear の基層は
-    // 軸シェーディング(Type 2)としてそれぞれ描かれる。
+    // Multiple backgrounds: the radial-gradient is drawn as a radial shading (Type 3), and the
+    // linear base layer as an axial shading (Type 2).
     let css = r#"body { margin: 0; }
        .box { width: 200px; height: 100px;
               background: radial-gradient(circle, #ffffff, #000000),
@@ -267,8 +267,8 @@ fn a_radial_gradient_with_at_position_emits_a_radial_shading() {
 
 #[test]
 fn a_gradient_with_a_transparent_stop_now_paints_with_a_soft_mask() {
-    // alpha 付き(`transparent`)の層は、色シェーディングに加え輝度ソフトマスク
-    // (`/SMask /Luminosity`)を出して不透明度を変調する。
+    // A layer with alpha (`transparent`) emits, in addition to the color shading, a luminosity
+    // soft mask (`/SMask /Luminosity`) to modulate opacity.
     let css = r#"body { margin: 0; }
        .box { width: 200px; height: 100px;
               background: linear-gradient(90deg, #ff0000 0%, transparent 100%); }"#;
@@ -289,8 +289,8 @@ fn a_gradient_with_a_transparent_stop_now_paints_with_a_soft_mask() {
 
 #[test]
 fn a_radial_gradient_with_a_transparent_stop_emits_a_radial_shading_and_soft_mask() {
-    // カバーCSSの放射層と同じ形(中心色→transparent)。放射シェーディング
-    // (Type 3)と輝度ソフトマスクの両方が出る。
+    // The same shape as the cover CSS's radial layer (center color -> transparent). Both a
+    // radial shading (Type 3) and a luminosity soft mask are emitted.
     let css = r#"body { margin: 0; }
        .box { width: 200px; height: 100px;
               background: radial-gradient(circle at 30% 20%,
@@ -305,8 +305,8 @@ fn a_radial_gradient_with_a_transparent_stop_emits_a_radial_shading_and_soft_mas
 
 #[test]
 fn background_clip_text_fills_glyphs_with_the_gradient() {
-    // グラデーション文字: テキストをクリップ(Tr 7)に積み、`sh`で軸シェーディングを
-    // グリフへ流し込む。矩形の背景塗り(fill)ではなくクリップ塗りになる。
+    // Gradient text: accumulate the text into the clip (Tr 7) and paint the axial shading into
+    // the glyphs with `sh`. It becomes a clip fill rather than a rectangular background fill.
     let css = r#"body { margin: 0; }
        h1 { font-size: 40px;
             background: linear-gradient(90deg, #ff0000, #0000ff);
@@ -314,20 +314,20 @@ fn background_clip_text_fills_glyphs_with_the_gradient() {
             -webkit-text-fill-color: transparent; color: transparent; }"#;
     let bytes = build_pdf(r#"<h1>GOLD</h1>"#, css);
 
-    // 軸シェーディングは背景勾配と同じく書かれている。
+    // The axial shading is written just as for a background gradient.
     assert!(
         count_occurrences(&bytes, b"/ShadingType 2") > 0,
         "the gradient still emits an axial shading"
     );
 
     let content = decompressed_stream_bytes(&bytes);
-    // テキストをクリップモード(7 Tr)で積む。
+    // Accumulate the text in clip mode (7 Tr).
     assert!(
         count_occurrences(&content, b"7 Tr") > 0,
         "glyphs should be added to the clip path (text rendering mode 7): {}",
         String::from_utf8_lossy(&content)
     );
-    // クリップへシェーディングを流し込む(名前付きシェーディング + sh)。
+    // Paint the shading into the clip (named shading + sh).
     assert!(
         count_occurrences(&content, b"/Gsh") > 0 && count_occurrences(&content, b" sh") > 0,
         "the gradient shading should be painted into the text clip"

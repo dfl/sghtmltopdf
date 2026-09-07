@@ -261,8 +261,8 @@ pub fn encode_pdf_with_options(
             page_image_refs.push(ids.root);
         }
 
-        // `linear-gradient()`背景のシェーディングオブジェクトを払い出して書く
-        // (画像と同じく「このページで使う分だけ」)。
+        // Allocate and write the shading objects for `linear-gradient()` backgrounds
+        // (just the ones used on this page, same as for images).
         let mut gradient_boxes = Vec::new();
         for b in &page.boxes {
             collect_gradient_boxes(b, styles, settings, &mut gradient_boxes);
@@ -386,7 +386,7 @@ pub fn encode_pdf_with_options(
                 &form_refs,
                 &alpha_gs_names,
                 &alpha_gs_ids,
-                // opacityで包んだサブツリー内の勾配は現状未対応(空)。
+                // Gradients inside an opacity-wrapped subtree are not supported yet (empty).
                 &GradientResources::default(),
             );
         }
@@ -629,7 +629,7 @@ pub(super) fn write_resources(
     for &form_ref in form_refs {
         xobject_dict.pair(Name(form_resource_name(form_ref).as_bytes()), form_ref);
     }
-    // alpha勾配の輝度マスクForm XObject。
+    // Luminosity-mask Form XObjects for alpha gradients.
     for (name, id) in &gradients.mask_forms {
         xobject_dict.pair(Name(name.as_bytes()), *id);
     }
@@ -638,7 +638,7 @@ pub(super) fn write_resources(
     for (name, &id) in alpha_gs_names.iter().zip(alpha_gs_ids.iter()) {
         ext_g_state_dict.pair(Name(name.as_bytes()), id);
     }
-    // alpha勾配の`/SMask`付き ExtGState。
+    // ExtGStates with a `/SMask` for alpha gradients.
     for (name, id) in &gradients.ext_gstates {
         ext_g_state_dict.pair(Name(name.as_bytes()), *id);
     }
@@ -821,10 +821,10 @@ pub(super) fn collect_image_uses(
     }
 }
 
-/// ページ内で`linear-gradient()`背景を持つboxを集める。各要素につき、その
-/// `NodeId`と、border-boxに合わせた描画準備済みの層を返す(`background-image`の
-/// 画像収集[`collect_image_uses`]と同じ木の辿り方)。呼び出し側が層ごとに
-/// シェーディングオブジェクトを払い出して書き、リソースへ登録する。
+/// Collect the boxes on a page that have `linear-gradient()` backgrounds. For each element,
+/// returns its `NodeId` and the render-ready layers fitted to the border-box (walking the tree
+/// the same way as the `background-image` image collection [`collect_image_uses`]). The caller
+/// allocates and writes a shading object per layer and registers it as a resource.
 pub(super) fn collect_gradient_boxes(
     b: &LaidOutBox,
     styles: &HashMap<NodeId, Rc<ComputedStyle>>,
@@ -874,9 +874,9 @@ pub(super) fn collect_gradient_boxes(
     }
 }
 
-/// 勾配層が払い出したリソースの登録情報とオブジェクト列。色シェーディングは
-/// `/Shading`へ、alpha層の ExtGState は`/ExtGState`へ、マスクForm XObject は
-/// `/XObject`へそれぞれ登録する。
+/// The resource registration info and object list allocated by the gradient layers. Color
+/// shadings are registered under `/Shading`, an alpha layer's ExtGState under `/ExtGState`,
+/// and its mask Form XObject under `/XObject`.
 #[derive(Default)]
 pub(super) struct GradientResources {
     pub shadings: Vec<(String, Ref)>,
@@ -885,10 +885,11 @@ pub(super) struct GradientResources {
     pub objects: Vec<(Ref, Chunk)>,
 }
 
-/// 集めた勾配層のシェーディング/関数/(alpha層は)輝度マスク一式を書き出し、
-/// リソース登録用の名前とRefを返す。各オブジェクトは独立`Chunk`なので、`write`は
-/// 呼び出し側が渡す(バッチは`pdf.extend`、ストリーミングは`write_chunk`)。名前は
-/// [`gradient::shading_name`]等で収集側・描画側が一致する。
+/// Write out the shadings/functions/(for alpha layers) the luminosity-mask set of the collected
+/// gradient layers, and return the names and Refs for resource registration. Each object is an
+/// independent `Chunk`, so the caller supplies the `write` (batch uses `pdf.extend`, streaming
+/// uses `write_chunk`). The names match between the collection and drawing sides via
+/// [`gradient::shading_name`] and friends.
 pub(super) fn write_gradient_shadings(
     gradient_boxes: &[(usize, Vec<gradient::GradientLayer>)],
     settings: &PageSettings,
@@ -1594,8 +1595,8 @@ fn render_box_with_style_inner(
             }
         }
         LaidOutContent::Inline(lines) => {
-            // `background-clip: text`+勾配なら、テキストをグリフでクリップした
-            // グラデーションとして描き、通常のテキスト塗りは省く。
+            // For `background-clip: text` + a gradient, draw the gradient clipped to the
+            // text's glyphs and skip the normal text fill.
             let clipped = style.background_clip == BackgroundClip::Text
                 && render_clip_text_gradient(
                     content,
@@ -2015,11 +2016,12 @@ fn render_box_decoration(
     render_border(content, layout, style, settings);
 }
 
-/// `linear-gradient()`背景の各層を、border-boxへクリップした軸シェーディング
-/// として描く。層のシェーディングオブジェクトとリソース登録は収集側
-/// ([`collect_gradient_boxes`])が済ませており、ここは同じ`NodeId`+層番号から
-/// 導いたリソース名で`sh`を出すだけ。手前の層(CSS順で先)が上に来るよう
-/// 逆順に描く。背景色の上・`background-image`/枠線の下。
+/// Draw each layer of a `linear-gradient()` background as an axial shading clipped to the
+/// border-box. The layers' shading objects and resource registration are already done by the
+/// collection side ([`collect_gradient_boxes`]); here we just emit `sh` with the resource name
+/// derived from the same `NodeId` + layer index. Drawn in reverse order so the front layer
+/// (first in CSS order) ends up on top. Above the background color, below
+/// `background-image`/the border.
 fn render_background_gradients(
     content: &mut RenderTarget<'_>,
     border_box: Rect,
@@ -2031,8 +2033,8 @@ fn render_background_gradients(
     if style.background_gradients.is_empty() {
         return;
     }
-    // `background-clip: text`のときは矩形ではなくテキストのグリフでクリップして
-    // 描く([`render_clip_text_gradient`])ので、ここ(矩形の背景)では描かない。
+    // For `background-clip: text`, drawing clips to the text's glyphs rather than the rectangle
+    // ([`render_clip_text_gradient`]), so we do not draw here (the rectangular background).
     if style.background_clip == BackgroundClip::Text {
         return;
     }
@@ -2042,8 +2044,8 @@ fn render_background_gradients(
     for (i, layer) in layers.iter().enumerate().rev() {
         let name = gradient::shading_name(node.0, i);
         content.save_state();
-        // alpha層は`/SMask`付き ExtGState で不透明度を変調する。gsはクリップより
-        // 先に設定する(マスクは設定時のCTMで評価される)。
+        // An alpha layer modulates opacity via an ExtGState with a `/SMask`. Set the gs before
+        // the clip (the mask is evaluated with the CTM in effect when it is set).
         if layer.has_alpha() {
             let gs_name = gradient::ext_gstate_name(node.0, i);
             content.set_parameters(Name(gs_name.as_bytes()));
@@ -3314,13 +3316,13 @@ fn show_run_glyphs(
     }
 }
 
-/// `background-clip: text` + `linear-gradient` の要素を「グラデーション文字」
-/// として描く。要素の全グリフを1つの`BT...ET`にクリップモード(Tr 7)で積み、
-/// `ET`でクリップが全グリフの和に確定した後に、背景と同じ軸シェーディングを
-/// そのクリップへ流し込む。行ごとに別々の`BT...ET`にすると、PDFはテキスト
-/// クリップを`ET`ごとに積(intersection)で取るため行同士で空になってしまう。
-/// そのため`render_line`は使わず、ここで全行を1つのテキストオブジェクトに
-/// まとめる。描いたら`true`を返し、呼び出し側は通常のテキスト描画を省く。
+/// Draw a `background-clip: text` + `linear-gradient` element as "gradient text". All of the
+/// element's glyphs are accumulated into a single `BT...ET` in clip mode (Tr 7), and once the
+/// clip is finalized at `ET` as the union of all glyphs, the same axial shading used for the
+/// background is painted into that clip. If each line used its own `BT...ET`, the PDF would take
+/// the text clip as an intersection at each `ET`, leaving the lines empty against each other.
+/// So `render_line` is not used; all lines are combined into one text object here. Returns
+/// `true` when it draws, and the caller skips the normal text rendering.
 #[allow(clippy::too_many_arguments)]
 fn render_clip_text_gradient(
     content: &mut RenderTarget<'_>,
@@ -3337,8 +3339,8 @@ fn render_clip_text_gradient(
     if layers.is_empty() {
         return false;
     }
-    // クリップに使えるグリフが1つも無ければ通常描画に任せる(空クリップに
-    // シェーディングを流すと何も出ず、テキストが消えるのを避ける)。
+    // If there is not a single glyph usable for the clip, fall back to normal drawing (painting
+    // a shading into an empty clip produces nothing, so avoid making the text disappear).
     let has_glyphs = lines
         .iter()
         .any(|line| line.runs.iter().any(|run| !run.glyphs.is_empty()));
@@ -3378,9 +3380,9 @@ fn render_clip_text_gradient(
     }
     content.end_text();
 
-    // 手前の層(CSS順で先)が上に来るよう逆順に流し込む。座標は背景と同じ
-    // 要素box基準([`collect_gradient_boxes`]と一致)なので、クリップだけが
-    // 矩形からグリフへ変わる。
+    // Paint in reverse order so the front layer (first in CSS order) ends up on top. The
+    // coordinates are relative to the same element box as the background (matching
+    // [`collect_gradient_boxes`]), so only the clip changes from a rectangle to the glyphs.
     for i in (0..layers.len()).rev() {
         content.shading(Name(gradient::shading_name(node.0, i).as_bytes()));
     }

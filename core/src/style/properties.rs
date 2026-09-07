@@ -68,18 +68,18 @@ pub enum PropertyDeclaration {
     /// `url(...)`(生の値、解決は呼び出し側任せ、`FontFaceSource::Url`と
     /// 同じ方針)。`None`は`none`(背景画像なし)を表す。
     BackgroundImage(Option<String>),
-    /// `background-image`/`background`の勾配層(`linear-gradient()`/
-    /// `radial-gradient()`、手前→奥のCSS順)。`conic-gradient`など未対応の層は
-    /// 含めない(パース側で読み飛ばす)。`background-image`が指定された宣言では
-    /// 常に生成し、勾配が無ければ空にする(同じプロパティの再指定で確実に
-    /// 上書きするため)。
+    /// The gradient layers of `background-image`/`background` (`linear-gradient()`/
+    /// `radial-gradient()`, in CSS order front to back). Unsupported layers such as
+    /// `conic-gradient` are not included (skipped by the parser). Always produced for a
+    /// declaration that specifies `background-image`, left empty if there are no gradients (so
+    /// that re-specifying the same property reliably overrides it).
     BackgroundGradients(Vec<SpecifiedBackgroundGradient>),
     BackgroundPosition(SpecifiedBackgroundPosition),
     BackgroundSize(SpecifiedBackgroundSize),
     BackgroundRepeat(BackgroundRepeat),
     /// `fixed`は`scroll`と同一視して描画する。
     BackgroundAttachment(BackgroundAttachment),
-    /// `background-clip`(`-webkit-`別名含む)。`text`でグラデーション文字。
+    /// `background-clip` (including the `-webkit-` alias). `text` makes gradient text.
     BackgroundClip(BackgroundClip),
     TextDecorationLine(TextDecorationLine),
     /// `::before`/`::after`/`::first-letter`用の`content`。`None`は
@@ -279,8 +279,8 @@ pub fn parse_declaration<'i>(
         "background-attachment" => {
             Ok(vec![D::BackgroundAttachment(parse_background_attachment(input)?)])
         },
-        // `-webkit-background-clip`はグラデーション文字(`background-clip: text`)の
-        // ために広く使われるため別名として受ける。
+        // `-webkit-background-clip` is widely used for gradient text (`background-clip: text`),
+        // so it is accepted as an alias.
         "background-clip" | "-webkit-background-clip" => {
             Ok(vec![D::BackgroundClip(parse_background_clip(input)?)])
         },
@@ -2131,10 +2131,11 @@ fn parse_quotes<'i>(
     Ok(Some(pairs))
 }
 
-/// `background-image`/`background`の1層。`linear-gradient()`と`url()`/`none`を
-/// 解釈し、`radial-gradient`など未対応の関数は中身を読み飛ばして
-/// `Unsupported`(=描画しない層)にする。複数背景のカンマ区切りリストの中で、
-/// 未対応の層があっても宣言全体を捨てずに、描ける層だけを残すための区分。
+/// A single layer of `background-image`/`background`. Interprets `linear-gradient()` and
+/// `url()`/`none`, and skips the contents of unsupported functions such as `radial-gradient`,
+/// turning them into `Unsupported` (a layer that is not drawn). A distinction that lets us keep
+/// only the drawable layers within a comma-separated multi-background list, rather than
+/// discarding the whole declaration when there is an unsupported layer.
 enum BgLayer {
     None,
     Url(String),
@@ -2142,9 +2143,9 @@ enum BgLayer {
     Unsupported,
 }
 
-/// カンマ区切りの背景画像リストを1層ずつ解釈する。`url`は最後の指定が勝ち、
-/// 勾配(`linear`/`radial`)はCSS順(手前→奥)に集める。`none`/未対応の層は
-/// 捨てる。
+/// Interpret a comma-separated background-image list one layer at a time. For `url`, the last
+/// one specified wins; gradients (`linear`/`radial`) are collected in CSS order (front to back).
+/// `none`/unsupported layers are discarded.
 fn parse_background_image_value<'i>(
     input: &mut Parser<'i, '_>,
 ) -> Result<(Option<String>, Vec<SpecifiedBackgroundGradient>), ParseError<'i, ()>> {
@@ -2160,8 +2161,8 @@ fn parse_background_image_value<'i>(
     Ok((url, gradients))
 }
 
-/// 背景画像1層。`none` / `url()` / `linear-gradient()` / `radial-gradient()` /
-/// (読み飛ばす)関数。
+/// A single background-image layer. `none` / `url()` / `linear-gradient()` /
+/// `radial-gradient()` / a (skipped) function.
 fn parse_background_image_layer<'i>(
     input: &mut Parser<'i, '_>,
 ) -> Result<BgLayer, ParseError<'i, ()>> {
@@ -2183,7 +2184,7 @@ fn parse_background_image_layer<'i>(
     input.parse_nested_block(|input| {
         if name.eq_ignore_ascii_case("linear-gradient") {
             if let Ok(gradient) = parse_linear_gradient_body(input) {
-                // 経由点の後に残りがあれば未対応の形。中身を読み飛ばして層ごと捨てる。
+                // Anything left after the stops means an unsupported form. Skip the contents and discard the whole layer.
                 while input.next().is_ok() {}
                 return Ok(BgLayer::Gradient(SpecifiedBackgroundGradient::Linear(
                     gradient,
@@ -2197,15 +2198,15 @@ fn parse_background_image_layer<'i>(
                 )));
             }
         }
-        // `conic-gradient`/`-webkit-*`や、対応外の勾配(コーナー方向・length位置
-        // など)は読み飛ばす。
+        // `conic-gradient`/`-webkit-*`, and unsupported gradients (corner directions, length
+        // positions, etc.), are skipped.
         while input.next().is_ok() {}
         Ok(BgLayer::Unsupported)
     })
 }
 
-/// `linear-gradient(...)`の中身(関数の括弧内)を解釈する。方向(角度または
-/// `to <side>`)は省略可で、既定は`to bottom`(180度)。
+/// Interpret the body of `linear-gradient(...)` (inside the function's parentheses). The
+/// direction (an angle or `to <side>`) may be omitted, defaulting to `to bottom` (180 degrees).
 fn parse_linear_gradient_body<'i>(
     input: &mut Parser<'i, '_>,
 ) -> Result<SpecifiedLinearGradient, ParseError<'i, ()>> {
@@ -2222,8 +2223,8 @@ fn parse_linear_gradient_body<'i>(
     Ok(SpecifiedLinearGradient { angle_deg, stops })
 }
 
-/// 勾配の方向。`<angle>`、または`to <side>`(単一辺のみ。コーナーは非対応)。
-/// 角度はCSSの慣習(`0deg`=上向き、時計回り)で度で返す。
+/// The gradient direction. `<angle>`, or `to <side>` (single side only; corners are not
+/// supported). The angle is returned in degrees following the CSS convention (`0deg`=up, clockwise).
 fn parse_gradient_direction<'i>(input: &mut Parser<'i, '_>) -> Result<f32, ParseError<'i, ()>> {
     if let Ok(radians) = input.try_parse(parse_angle_radians) {
         return Ok(radians.to_degrees());
@@ -2237,8 +2238,8 @@ fn parse_gradient_direction<'i>(input: &mut Parser<'i, '_>) -> Result<f32, Parse
         "left" => 270.0,
         _ => return Err(input.new_custom_error(())),
     };
-    // コーナー(`to top right`等)は要素寸法に依存するため非対応。2つ目の辺が
-    // 続くならエラーにして、層ごと読み飛ばさせる。
+    // Corners (`to top right`, etc.) depend on the element's dimensions and are not supported.
+    // If a second side follows, error out so the whole layer is skipped.
     if input
         .try_parse(|input| input.expect_ident().map(|_| ()))
         .is_ok()
@@ -2248,8 +2249,8 @@ fn parse_gradient_direction<'i>(input: &mut Parser<'i, '_>) -> Result<f32, Parse
     Ok(angle)
 }
 
-/// 色経由点のカンマ区切りリスト。各点は`<color> <percentage>?`。位置(0..1の
-/// 分数)は省略可で、省略時は描画側が前後から等間隔で補完する。
+/// A comma-separated list of color stops. Each stop is `<color> <percentage>?`. The position
+/// (a 0..1 fraction) may be omitted, in which case the drawing side fills it in evenly from the neighbors.
 fn parse_color_stop_list<'i>(
     input: &mut Parser<'i, '_>,
 ) -> Result<Vec<SpecifiedColorStop>, ParseError<'i, ()>> {
@@ -2265,15 +2266,15 @@ fn parse_color_stop_list<'i>(
     Ok(stops)
 }
 
-/// `radial-gradient(...)`の中身(関数の括弧内)を解釈する。先頭の
-/// `[<shape>? <size>? [at <position>]?]`(いずれも省略可)を読み、続く色経由点
-/// リストを取る。形状(`circle`/`ellipse`)・サイズキーワード(`closest-side`等)や
-/// 明示サイズは受理するが、v1では半径を常に farthest-corner として描くため
-/// 値は捨てる。中心位置は`at <position>`から取り、省略時は中央`(0.5, 0.5)`。
+/// Interpret the body of `radial-gradient(...)` (inside the function's parentheses). Reads the
+/// leading `[<shape>? <size>? [at <position>]?]` (all optional), then takes the following color
+/// stop list. The shape (`circle`/`ellipse`), size keywords (`closest-side`, etc.), and explicit
+/// sizes are accepted, but in v1 the radius is always drawn as farthest-corner, so the values are
+/// discarded. The center is taken from `at <position>`, defaulting to the center `(0.5, 0.5)`.
 fn parse_radial_gradient_body<'i>(
     input: &mut Parser<'i, '_>,
 ) -> Result<SpecifiedRadialGradient, ParseError<'i, ()>> {
-    // 先頭の設定部(存在すれば末尾にカンマがある)。無ければ経由点から直接始まる。
+    // The leading configuration part (with a trailing comma if present). If absent, it starts directly from the stops.
     let center = input.try_parse(parse_radial_prelude).unwrap_or((0.5, 0.5));
     let stops = parse_color_stop_list(input)?;
     if stops.len() < 2 {
@@ -2282,14 +2283,15 @@ fn parse_radial_gradient_body<'i>(
     Ok(SpecifiedRadialGradient { center, stops })
 }
 
-/// `radial-gradient`の設定部`[<shape>? <size>? [at <position>]?] ,`。少なくとも
-/// 1要素を読み、末尾のカンマまで消費して中心`(x, y)`(0..1の分数)を返す。何も
-/// 読めなければ`Err`(=設定部なし、呼び出し側が経由点から解釈する)。
+/// The `radial-gradient` configuration part `[<shape>? <size>? [at <position>]?] ,`. Reads at
+/// least one element, consumes through the trailing comma, and returns the center `(x, y)` (a
+/// 0..1 fraction). If nothing can be read, returns `Err` (i.e. no configuration part; the caller
+/// interprets from the stops).
 fn parse_radial_prelude<'i>(input: &mut Parser<'i, '_>) -> Result<(f32, f32), ParseError<'i, ()>> {
     let mut center = (0.5, 0.5);
     let mut saw_something = false;
 
-    // 形状キーワード(円・楕円)。値は使わない。
+    // Shape keyword (circle/ellipse). The value is not used.
     if input
         .try_parse(|input| {
             let ident = input.expect_ident()?.clone();
@@ -2303,7 +2305,7 @@ fn parse_radial_prelude<'i>(input: &mut Parser<'i, '_>) -> Result<(f32, f32), Pa
         saw_something = true;
     }
 
-    // サイズ(キーワードまたは明示 length/percentage)。複数トークン可、値は捨てる。
+    // Size (a keyword or an explicit length/percentage). Multiple tokens allowed; the value is discarded.
     loop {
         let consumed = input
             .try_parse(|input| {
@@ -2324,7 +2326,7 @@ fn parse_radial_prelude<'i>(input: &mut Parser<'i, '_>) -> Result<(f32, f32), Pa
         }
     }
 
-    // `at <position>`。位置はパーセンテージ/キーワードを分数として取り出す。
+    // `at <position>`. The position extracts percentages/keywords as fractions.
     if input
         .try_parse(|input| input.expect_ident_matching("at"))
         .is_ok()
@@ -2344,9 +2346,9 @@ fn parse_radial_prelude<'i>(input: &mut Parser<'i, '_>) -> Result<(f32, f32), Pa
     Ok(center)
 }
 
-/// `radial-gradient`の中心位置成分を0..1の分数へ。パーセンテージ/キーワードは
-/// そのまま割合になる。長さ(px等)は要素寸法に依存するためv1では中央(0.5)で
-/// 近似する。
+/// Convert a `radial-gradient` center position component into a 0..1 fraction. Percentages/
+/// keywords become the fraction directly. Lengths (px, etc.) depend on the element's dimensions,
+/// so v1 approximates them with the center (0.5).
 fn length_percentage_fraction(lp: SpecifiedLengthPercentage) -> f32 {
     match lp {
         SpecifiedLengthPercentage::Percentage(p) => p,
@@ -2492,7 +2494,7 @@ fn parse_background_attachment<'i>(
     })
 }
 
-/// `background-clip`。`text`だけ特別扱いし、box系キーワードは既定へ寄せる。
+/// `background-clip`. Only `text` is treated specially; box keywords fall back to the default.
 fn parse_background_clip<'i>(
     input: &mut Parser<'i, '_>,
 ) -> Result<BackgroundClip, ParseError<'i, ()>> {
@@ -2504,8 +2506,8 @@ fn parse_background_clip<'i>(
     })
 }
 
-/// `background`ショートハンド1層分のスロット。カンマ区切りの各層をこの形に
-/// 読み、[`parse_background_shorthand`]がまとめる。
+/// The slots for one layer of the `background` shorthand. Each comma-separated layer is read
+/// into this shape, and [`parse_background_shorthand`] combines them.
 #[derive(Default)]
 struct BgLayerSlots {
     color: Option<Color>,
@@ -2517,9 +2519,9 @@ struct BgLayerSlots {
     attachment: Option<BackgroundAttachment>,
 }
 
-/// `background`ショートハンドの1層を、値の種類を`try_parse`で判定しながら読む
-/// (`border`ショートハンドと同じ方式)。画像スロットは`url()`/`linear-gradient()`
-/// /`none`/未対応関数のいずれも受け、未対応関数は読み飛ばして層を空にする。
+/// Read one layer of the `background` shorthand, determining the kind of each value with
+/// `try_parse` (the same approach as the `border` shorthand). The image slot accepts any of
+/// `url()`/`linear-gradient()`/`none`/an unsupported function; unsupported functions are skipped, leaving the layer empty.
 fn parse_background_layer_slots<'i>(
     input: &mut Parser<'i, '_>,
 ) -> Result<BgLayerSlots, ParseError<'i, ()>> {
@@ -2569,19 +2571,20 @@ fn parse_background_layer_slots<'i>(
     Ok(slots)
 }
 
-/// `background`ショートハンドの簡易実装。
-/// `color`/`image`/`repeat`/`attachment`/`position`(`/`区切りで直後に`size`)
-/// を任意の順序で受け付ける(`border`ショートハンドと同じ「ループでどの種類の
-/// 値か`try_parse`で判定」方式)。仕様通り、指定されなかったロングハンドは全て
-/// 初期値へリセットする(`border`/`list-style`
-/// ショートハンドとは異なり、以前の宣言を引きずらない)。
+/// A simple implementation of the `background` shorthand.
+/// Accepts `color`/`image`/`repeat`/`attachment`/`position` (with `size` immediately after a
+/// `/` separator) in any order (the same "loop determining the kind of each value with
+/// `try_parse`" approach as the `border` shorthand). As per the spec, every longhand that is
+/// not specified is reset to its initial value (unlike the `border`/`list-style` shorthands, it
+/// does not carry over previous declarations).
 fn parse_background_shorthand<'i>(
     input: &mut Parser<'i, '_>,
 ) -> Result<Vec<PropertyDeclaration>, ParseError<'i, ()>> {
     use PropertyDeclaration as D;
-    // カンマ区切りの複数背景に対応する。各層を[`parse_background_layer_slots`]で
-    // 読み、`url`/color/positionは最後(先頭)の指定を採り、`linear-gradient`は
-    // CSS順(手前→奥)に集める。単一層(カンマ無し)の場合は従来どおり。
+    // Supports comma-separated multiple backgrounds. Read each layer with
+    // [`parse_background_layer_slots`], take the last (first) specification for `url`/color/
+    // position, and collect `linear-gradient` in CSS order (front to back). A single layer (no
+    // comma) behaves as before.
     let layers = input.parse_comma_separated(parse_background_layer_slots)?;
 
     let mut color = None;
@@ -2601,8 +2604,8 @@ fn parse_background_shorthand<'i>(
         if let Some(g) = layer.gradient {
             gradients.push(g);
         }
-        // position/size/repeat/attachmentは層ごとに持てるが、単純化のため
-        // 先頭層の指定だけを全体へ反映する(テンプレートの用法では十分)。
+        // position/size/repeat/attachment can be held per layer, but for simplicity only the
+        // first layer's specification is applied to the whole (sufficient for template usage).
         if i == 0 {
             position = layer.position;
             size = layer.size;

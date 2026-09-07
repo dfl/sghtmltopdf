@@ -1,18 +1,18 @@
-//! `linear-gradient()`/`radial-gradient()`背景を PDF のシェーディング
-//! (Type 2 軸 / Type 3 放射)として描く。
+//! Paint `linear-gradient()`/`radial-gradient()` backgrounds as PDF shadings
+//! (Type 2 axial / Type 3 radial).
 //!
-//! 勾配データは`ComputedStyle`に載っているため、画像のようなフェッチ/デコードは
-//! 不要で、ページ描画時に「使われている勾配のシェーディングオブジェクトを払い
-//! 出して書く」だけで済む(画像の`collect_image_uses`と同じ構造)。
+//! The gradient data lives on `ComputedStyle`, so there is no fetch/decode like for images;
+//! at page-render time it is enough to "allocate and write the shading objects for the
+//! gradients actually used" (the same structure as `collect_image_uses` for images).
 //!
-//! 対応範囲:
-//! - `linear-gradient()`(角度・単一辺方向)と`radial-gradient()`(円・
-//!   farthest-corner 固定、`at <position>`の中心)。
-//! - alpha付き・`transparent`の経由点。色ランプ(RGB)に加え、輝度ソフトマスク
-//!   (DeviceGray のシェーディング + マスクForm XObject + ExtGState の`/SMask`)を
-//!   払い出し、描画側が`gs`で不透明度を変調する。
+//! Scope:
+//! - `linear-gradient()` (angle / single-side direction) and `radial-gradient()` (circle,
+//!   fixed farthest-corner, center from `at <position>`).
+//! - Stops with alpha / `transparent`. In addition to the color ramp (RGB), a luminosity soft
+//!   mask (a DeviceGray shading + a mask Form XObject + an ExtGState `/SMask`) is allocated,
+//!   and the drawing side modulates opacity with `gs`.
 //!
-//! 経由点が2つ未満の層、寸法0の要素は描かない(層ごと読み飛ばす)。
+//! Layers with fewer than two stops, and zero-sized elements, are not drawn (the layer is skipped).
 
 use pdf_writer::types::{FunctionShadingType, MaskType};
 use pdf_writer::{Chunk, Ref};
@@ -21,24 +21,24 @@ use pdf_writer::{Content, Name, Rect as PdfRect};
 use crate::layout::{PageSettings, Rect};
 use crate::style::{BackgroundGradient, ComputedStyle, LinearGradient, RadialGradient};
 
-/// 描画準備済みの1層。座標はデバイス空間(px, PDFのy向き=上)で、`sh`を出す
-/// ときのクリップ矩形と同じ座標系。経由点は位置正規化済み。
+/// A single render-ready layer. Coordinates are in device space (px, PDF y-up), the same
+/// coordinate system as the clip rectangle when `sh` is emitted. Stop positions are normalized.
 pub struct GradientLayer {
-    /// シェーディングの種類と座標(軸`[x0,y0,x1,y1]` / 放射`[cx,cy,0,cx,cy,r]`)。
+    /// The shading type and coordinates (axial `[x0,y0,x1,y1]` / radial `[cx,cy,0,cx,cy,r]`).
     pub geometry: LayerGeometry,
-    /// `(位置 0..1, [r, g, b] 0..1, alpha 0..1)`。位置は昇順。
+    /// `(position 0..1, [r, g, b] 0..1, alpha 0..1)`. Positions are ascending.
     pub stops: Vec<RampStop>,
 }
 
-/// 勾配の形状(軸または放射)と、その座標。
+/// The gradient shape (axial or radial) and its coordinates.
 pub enum LayerGeometry {
-    /// 軸シェーディング(Type 2)。`[x0, y0, x1, y1]`。
+    /// Axial shading (Type 2). `[x0, y0, x1, y1]`.
     Axial([f32; 4]),
-    /// 放射シェーディング(Type 3)。`[cx, cy, r0, cx, cy, r1]`(内円 r0=0)。
+    /// Radial shading (Type 3). `[cx, cy, r0, cx, cy, r1]` (inner circle r0=0).
     Radial([f32; 6]),
 }
 
-/// 位置確定済みの経由点1つ。
+/// A single stop with its position resolved.
 pub struct RampStop {
     pub pos: f32,
     pub rgb: [f32; 3],
@@ -46,7 +46,7 @@ pub struct RampStop {
 }
 
 impl GradientLayer {
-    /// alpha付き(<1)の経由点を持つか。持つ場合は輝度ソフトマスクを併用する。
+    /// Whether it has any stop with alpha (<1). If so, a luminosity soft mask is used alongside.
     pub fn has_alpha(&self) -> bool {
         self.stops.iter().any(|s| s.alpha < 1.0)
     }
@@ -66,27 +66,27 @@ impl GradientLayer {
     }
 }
 
-/// 1つの勾配層の色シェーディングリソース名。同一ページ内で`NodeId`は一意
-/// (opacity Form と同じ前提)なので、`NodeId`とCSS層番号で決まる名前は
-/// 収集側と描画側で必ず一致する。
+/// The color shading resource name for a single gradient layer. Within one page `NodeId` is
+/// unique (the same assumption as the opacity Form), so a name determined by `NodeId` and the
+/// CSS layer index always matches between the collection and drawing sides.
 pub fn shading_name(node_index: usize, layer_index: usize) -> String {
     format!("Gsh{node_index}_{layer_index}")
 }
 
-/// alpha層の輝度ソフトマスクを持つマスクForm XObject のリソース名(`/XObject`)。
+/// The resource name (`/XObject`) of the mask Form XObject holding an alpha layer's luminosity soft mask.
 pub fn mask_form_name(node_index: usize, layer_index: usize) -> String {
     format!("Gmask{node_index}_{layer_index}")
 }
 
-/// alpha層の`/SMask`を仕込んだ ExtGState のリソース名(`/ExtGState`)。
+/// The resource name (`/ExtGState`) of the ExtGState carrying an alpha layer's `/SMask`.
 pub fn ext_gstate_name(node_index: usize, layer_index: usize) -> String {
     format!("Ggs{node_index}_{layer_index}")
 }
 
-/// `style`の勾配層を、`border_box`(要素の絶対px矩形)に合わせた描画準備済み
-/// 層へ変換する。描けない層(経由点不足・寸法0)は除外するので、返るのは実際に
-/// シェーディングを出す層だけ。収集側・描画側の両方がこれを呼び、層数と順序を
-/// 一致させる。
+/// Convert the gradient layers in `style` into render-ready layers fitted to `border_box` (the
+/// element's absolute px rectangle). Layers that cannot be drawn (too few stops, zero size) are
+/// excluded, so what is returned is only the layers that actually emit a shading. Both the
+/// collection and drawing sides call this, keeping the layer count and order consistent.
 pub fn layers_for(
     style: &ComputedStyle,
     border_box: Rect,
@@ -145,7 +145,7 @@ fn radial_layer(
     })
 }
 
-/// 経由点の色(RgbaColor)と位置から、位置正規化済みの`RampStop`列を作る。
+/// Build a position-normalized `RampStop` list from the stop colors (RgbaColor) and positions.
 fn ramp_stops(
     positions: &[Option<f32>],
     colors: impl Iterator<Item = crate::style::RgbaColor>,
@@ -165,13 +165,14 @@ fn ramp_stops(
         .collect()
 }
 
-/// CSSの勾配角度(`0deg`=上、時計回り)を、`border_box`内の軸の始点・終点へ。
-/// 軸長は「角に0%/100%が当たる」CSSの定義(`|W·sinθ| + |H·cosθ|`)。返す座標は
-/// デバイス空間(x = margin.left + x, y = size.height − margin.top − y)。
+/// Turn the CSS gradient angle (`0deg`=up, clockwise) into the axis's start and end points
+/// within `border_box`. The axis length follows the CSS definition where 0%/100% land on the
+/// corners (`|W·sinθ| + |H·cosθ|`). The returned coordinates are in device space
+/// (x = margin.left + x, y = size.height − margin.top − y).
 fn axis_coords(angle_deg: f32, border_box: Rect, settings: &PageSettings) -> [f32; 4] {
     let theta = angle_deg.to_radians();
     let (w, h) = (border_box.width, border_box.height);
-    // CSS座標(x右・y下)での終点方向。0deg=上(y減少)なので (sinθ, -cosθ)。
+    // End-point direction in CSS coordinates (x right, y down). 0deg=up (y decreasing), so (sinθ, -cosθ).
     let (dx, dy) = (theta.sin(), -theta.cos());
     let half_len = (w * theta.sin().abs() + h * theta.cos().abs()) / 2.0;
     let (cx, cy) = (border_box.x + w / 2.0, border_box.y + h / 2.0);
@@ -181,9 +182,10 @@ fn axis_coords(angle_deg: f32, border_box: Rect, settings: &PageSettings) -> [f3
     [x0, y0, x1, y1]
 }
 
-/// `radial-gradient`の中心(0..1分数)と、farthest-corner の半径から放射
-/// シェーディング座標`[cx, cy, 0, cx, cy, r]`を作る。デバイス変換は平行移動と
-/// y反転(等長変換)なので、半径はCSS座標のまま4隅までの最大距離で求めてよい。
+/// Build the radial shading coordinates `[cx, cy, 0, cx, cy, r]` from the `radial-gradient`
+/// center (0..1 fractions) and the farthest-corner radius. The device transform is a
+/// translation plus y-flip (an isometry), so the radius can be found as the maximum distance to
+/// the four corners in CSS coordinates as-is.
 fn radial_coords(center: (f32, f32), border_box: Rect, settings: &PageSettings) -> [f32; 6] {
     let (w, h) = (border_box.width, border_box.height);
     let cx_css = border_box.x + center.0 * w;
@@ -202,7 +204,7 @@ fn radial_coords(center: (f32, f32), border_box: Rect, settings: &PageSettings) 
     [cx, cy, 0.0, cx, cy, radius]
 }
 
-/// CSS座標(x右・y下)をデバイス空間(px, PDFのy向き=上)へ。
+/// Convert CSS coordinates (x right, y down) into device space (px, PDF y-up).
 fn to_device(px: f32, py: f32, settings: &PageSettings) -> (f32, f32) {
     (
         settings.margin.left + px,
@@ -210,8 +212,9 @@ fn to_device(px: f32, py: f32, settings: &PageSettings) -> (f32, f32) {
     )
 }
 
-/// 経由点の位置(0..1)を確定する。先頭省略は0、末尾省略は1、途中の省略は前後の
-/// 確定位置から等間隔で補完し、逆行はひとつ前の位置へ丸める(CSSの規則)。
+/// Resolve the stop positions (0..1). A missing first is 0, a missing last is 1, missing
+/// positions in between are filled evenly from the surrounding resolved positions, and a
+/// backward step is rounded up to the previous position (the CSS rule).
 fn normalized_positions(positions: &[Option<f32>]) -> Vec<f32> {
     let n = positions.len();
     let mut pos: Vec<Option<f32>> = positions.to_vec();
@@ -221,7 +224,7 @@ fn normalized_positions(positions: &[Option<f32>]) -> Vec<f32> {
     if pos[n - 1].is_none() {
         pos[n - 1] = Some(1.0);
     }
-    // 逆行は直前の位置へクランプ(単調非減少にする)。
+    // Clamp a backward step to the previous position (make it monotonically non-decreasing).
     let mut last = 0.0;
     for p in pos.iter_mut().flatten() {
         if *p < last {
@@ -229,7 +232,7 @@ fn normalized_positions(positions: &[Option<f32>]) -> Vec<f32> {
         }
         last = *p;
     }
-    // 省略区間を等間隔で埋める。
+    // Fill the missing runs evenly.
     let mut result = vec![0.0; n];
     let mut i = 0;
     while i < n {
@@ -238,7 +241,7 @@ fn normalized_positions(positions: &[Option<f32>]) -> Vec<f32> {
             i += 1;
             continue;
         }
-        // pos[i] は None。直前は確定済み(先頭は上で埋めた)。
+        // pos[i] is None. The previous one is resolved (the first was filled above).
         let start = result[i - 1];
         let mut j = i;
         while j < n && pos[j].is_none() {
@@ -254,24 +257,25 @@ fn normalized_positions(positions: &[Option<f32>]) -> Vec<f32> {
     result
 }
 
-/// 1つのalpha層が払い出したリソースのRef群。マスクForm XObjectと ExtGState は
-/// 描画側がそれぞれ`/XObject`・`/ExtGState`へ登録する。
+/// The Refs of the resources allocated by a single alpha layer. The drawing side registers the
+/// mask Form XObject and the ExtGState under `/XObject` and `/ExtGState` respectively.
 pub struct AlphaMaskRefs {
     pub mask_form: Ref,
     pub ext_gstate: Ref,
 }
 
-/// 1層分の払い出し結果。色シェーディングのRefは常に、alphaソフトマスク一式は
-/// alpha層のときだけ返す。`objects`は独立`Chunk`の列(バッチは`pdf.extend`、
-/// ストリーミングは`write_chunk`で書ける)。
+/// The allocation result for one layer. The color shading Ref is always returned; the alpha
+/// soft-mask set only for an alpha layer. `objects` is a list of independent `Chunk`s (writable
+/// with `pdf.extend` in batch, `write_chunk` in streaming).
 pub struct LayerObjects {
     pub color_shading: Ref,
     pub alpha: Option<AlphaMaskRefs>,
     pub objects: Vec<(Ref, Chunk)>,
 }
 
-/// 隣り合う経由点ごとの指数補間関数(n=1で線形)+ stitching をつなぎ、値の列
-/// (色は`[r,g,b]`、alphaは`[gray]`)を補間する関数のRefを返す。
+/// Chain an exponential interpolation function for each adjacent pair of stops (n=1 is linear)
+/// plus a stitching function, and return the Ref of the function that interpolates the value
+/// sequence (color is `[r,g,b]`, alpha is `[gray]`).
 fn build_ramp_function(
     positions: &[f32],
     values: &[Vec<f32>],
@@ -302,7 +306,7 @@ fn build_ramp_function(
         let mut st = chunk.stitching_function(id);
         st.domain([0.0, 1.0]);
         st.functions(segment_refs.iter().copied());
-        // 内側の経由点の位置が区間境界。
+        // The positions of the inner stops are the segment boundaries.
         st.bounds(positions[1..positions.len() - 1].iter().copied());
         st.encode(segment_refs.iter().flat_map(|_| [0.0, 1.0]));
     }
@@ -310,7 +314,7 @@ fn build_ramp_function(
     id
 }
 
-/// 1つの`FunctionShading`を書く(色はDeviceRGB、alphaはDeviceGray)。
+/// Write a single `FunctionShading` (color in DeviceRGB, alpha in DeviceGray).
 fn write_shading(
     layer: &GradientLayer,
     function: Ref,
@@ -330,15 +334,15 @@ fn write_shading(
         }
         sh.coords(layer.coords());
         sh.function(function);
-        // 軸/半径の外側は端の色で塗り続ける。
+        // Beyond the axis/radius, keep painting with the end color.
         sh.extend([true, true]);
     }
     objects.push((shading_ref, chunk));
     shading_ref
 }
 
-/// 1層分のPDFオブジェクト(色ランプ+シェーディング、alpha層なら輝度マスク
-/// 一式も)を書き、Ref群と`(Ref, Chunk)`の列を返す。
+/// Write one layer's PDF objects (the color ramp + shading, plus the luminosity-mask set for an
+/// alpha layer) and return the Refs and the list of `(Ref, Chunk)`.
 pub fn write_layer_objects(
     layer: &GradientLayer,
     settings: &PageSettings,
@@ -348,21 +352,22 @@ pub fn write_layer_objects(
 
     let positions: Vec<f32> = layer.stops.iter().map(|s| s.pos).collect();
 
-    // 色ランプ(RGB)。
+    // Color ramp (RGB).
     let rgb_values: Vec<Vec<f32>> = layer.stops.iter().map(|s| s.rgb.to_vec()).collect();
     let color_fn = build_ramp_function(&positions, &rgb_values, &mut objects, alloc);
     let color_shading = write_shading(layer, color_fn, false, &mut objects, alloc);
 
     let alpha = if layer.has_alpha() {
-        // alphaランプ(DeviceGray、alpha 1.0→白/1.0、0→黒/0.0)。
+        // Alpha ramp (DeviceGray; alpha 1.0 -> white/1.0, 0 -> black/0.0).
         let alpha_values: Vec<Vec<f32>> = layer.stops.iter().map(|s| vec![s.alpha]).collect();
         let alpha_fn = build_ramp_function(&positions, &alpha_values, &mut objects, alloc);
         let alpha_shading = write_shading(layer, alpha_fn, true, &mut objects, alloc);
 
-        // マスクForm XObject: bbox=ページ全体(色シェーディングと同じデバイス
-        // 空間の px 座標)。中身は輝度シェーディングをbbox全面に`sh`で塗り、
-        // `/Group /S /Transparency /CS /DeviceGray`を宣言する。輝度シェーディングは
-        // このForm内部の`/Resources /Shading`に登録する(名前はForm内で自己完結)。
+        // Mask Form XObject: bbox = the whole page (px coordinates in the same device space as
+        // the color shading). Its content paints the luminosity shading over the entire bbox
+        // with `sh` and declares `/Group /S /Transparency /CS /DeviceGray`. The luminosity
+        // shading is registered in this Form's own `/Resources /Shading` (the name is
+        // self-contained within the Form).
         let mask_form = alloc();
         let mut form_content = Content::new();
         let alpha_name = alpha_shading_local_name();
@@ -385,7 +390,7 @@ pub fn write_layer_objects(
         }
         objects.push((mask_form, form_chunk));
 
-        // ExtGState: `/SMask << /S /Luminosity /G <mask_form> >>`。
+        // ExtGState: `/SMask << /S /Luminosity /G <mask_form> >>`.
         let ext_gstate = alloc();
         let mut gs_chunk = Chunk::new();
         {
@@ -411,8 +416,8 @@ pub fn write_layer_objects(
     }
 }
 
-/// マスクForm XObject の`/Resources /Shading`内で輝度シェーディングに付ける
-/// 固定名(Form内で自己完結するため層番号に依存しなくてよい)。
+/// The fixed name given to the luminosity shading inside the mask Form XObject's
+/// `/Resources /Shading` (self-contained within the Form, so it need not depend on the layer index).
 fn alpha_shading_local_name() -> String {
     "Sh".to_string()
 }
@@ -453,8 +458,8 @@ mod tests {
 
     #[test]
     fn to_bottom_axis_runs_down_the_box_in_device_space() {
-        // 180deg = to bottom。デバイス空間ではyが上向きなので、始点(0%)が上端
-        // (大きいy)、終点(100%)が下端(小さいy)。
+        // 180deg = to bottom. In device space y points up, so the start (0%) is at the top
+        // edge (large y) and the end (100%) at the bottom edge (small y).
         let g = linear(
             180.0,
             vec![
@@ -495,8 +500,8 @@ mod tests {
 
     #[test]
     fn radial_center_and_farthest_corner_radius() {
-        // 中心 30%,20% の 600x800 ボックス。中心 (180, 160)。最遠角は右下
-        // (600, 800): √(420² + 640²) = √(176400 + 409600) = √586000 ≈ 765.5。
+        // A 600x800 box with center 30%,20%. Center (180, 160). The farthest corner is the
+        // bottom-right (600, 800): √(420² + 640²) = √(176400 + 409600) = √586000 ≈ 765.5.
         let center = (0.3, 0.2);
         let border_box = Rect {
             x: 0.0,
@@ -505,7 +510,7 @@ mod tests {
             height: 800.0,
         };
         let [cx, cy, r0, cx1, cy1, r1] = radial_coords(center, border_box, &settings());
-        // デバイス空間: x=180, y=800-160=640。
+        // Device space: x=180, y=800-160=640.
         assert!((cx - 180.0).abs() < 0.01 && (cx1 - 180.0).abs() < 0.01);
         assert!((cy - 640.0).abs() < 0.01 && (cy1 - 640.0).abs() < 0.01);
         assert!((r0 - 0.0).abs() < 0.01);
@@ -517,8 +522,8 @@ mod tests {
 
     #[test]
     fn alpha_ramp_maps_alpha_to_gray_values() {
-        // alpha 1.0 → gray 1.0(白)、alpha 0.0 → gray 0.0(黒)。RampStopの
-        // alphaがそのままDeviceGray値になることを確認する。
+        // alpha 1.0 -> gray 1.0 (white), alpha 0.0 -> gray 0.0 (black). Verify that a
+        // RampStop's alpha becomes the DeviceGray value directly.
         let layer = GradientLayer {
             geometry: LayerGeometry::Axial([0.0, 0.0, 10.0, 0.0]),
             stops: vec![

@@ -1,9 +1,9 @@
-//! `--dump-outline`のXML組み立て。
+//! `--dump-outline` XML assembly.
 //!
-//! 出力はwkhtmltopdfの`--dump-outline`と同じ構造・名前空間にする
-//! (`src/lib/pdf.cc`の`dumpOutline`)。見出しレベルの相対関係で
-//! `<item>`を入れ子にし、各項目は`title`・`page`・`link`属性を持つ。
-//! `page`はcover・TOCを数えた1始まりの物理ページ番号。
+//! The output uses the same structure and namespace as wkhtmltopdf's `--dump-outline`
+//! (`dumpOutline` in `src/lib/pdf.cc`). `<item>` elements are nested according to the
+//! relative heading levels, and each item carries `title`, `page`, and `link` attributes.
+//! `page` is the 1-based physical page number counting the cover and TOC.
 //!
 //! ```xml
 //! <?xml version="1.0" encoding="UTF-8"?>
@@ -18,7 +18,7 @@ use std::fmt::Write as _;
 
 use crate::engine::OutlineHeading;
 
-/// wkhtmltopdf互換のアウトラインXMLを組み立てる。
+/// Build the wkhtmltopdf-compatible outline XML.
 pub fn build_outline_xml(headings: &[OutlineHeading]) -> String {
     let mut xml = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
@@ -30,16 +30,16 @@ pub fn build_outline_xml(headings: &[OutlineHeading]) -> String {
         return xml;
     }
 
-    // 現在開いている`<item>`のレベルを積む。`cli::toc::write_entries`と
-    // 同じ入れ子アルゴリズム(レベルの飛びは1段として扱う)。
+    // Stack of the levels of the currently open `<item>` elements. Same nesting
+    // algorithm as `cli::toc::write_entries` (a jump in level counts as one step).
     let mut open_levels: Vec<u8> = Vec::new();
 
     for h in headings {
         while let Some(&top) = open_levels.last() {
             if h.level > top {
-                break; // 深くなる: いまの項目の子として書く。
+                break; // Deeper: write it as a child of the current item.
             }
-            // 同じか浅い: 開いている項目を閉じる。
+            // Same or shallower: close the open item.
             close_item(&mut xml, open_levels.len());
             open_levels.pop();
         }
@@ -57,7 +57,7 @@ pub fn build_outline_xml(headings: &[OutlineHeading]) -> String {
     xml
 }
 
-/// 開きタグ`<item ...>`を1つ書く(子があるので閉じない)。
+/// Write a single opening `<item ...>` tag (left unclosed, since it has children).
 fn open_item(xml: &mut String, h: &OutlineHeading, depth: usize) {
     indent(xml, depth + 1);
     let _ = writeln!(
@@ -80,7 +80,7 @@ fn indent(xml: &mut String, depth: usize) {
     }
 }
 
-/// XML属性値のエスケープ。`"`を含む属性で囲むため`"`も逃がす。
+/// Escape an XML attribute value. Since attributes are quoted with `"`, `"` is escaped too.
 fn escape_attr(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -116,7 +116,7 @@ mod tests {
     fn an_item_carries_title_page_and_link() {
         let xml = build_outline_xml(&[heading(1, "Intro", 3)]);
         assert!(
-            // `"#`(link属性)を含むためraw stringは`r##`で囲む。
+            // Contains `"#` (the link attribute), so the raw string is delimited with `r##`.
             xml.contains(r##"<item title="Intro" page="3" link="#__sgtoc_3">"##),
             "got: {xml}"
         );
@@ -131,10 +131,10 @@ mod tests {
         let a1 = xml.find(r#"title="A-1""#).unwrap();
         let a_close = xml[a..].find("</item>").unwrap() + a;
         let b = xml.find(r#"title="B""#).unwrap();
-        // A-1 は A の閉じタグより前(=中に入れ子)、B は A を閉じた後。
+        // A-1 comes before A's closing tag (i.e. nested inside), B comes after A is closed.
         assert!(a < a1 && a1 < a_close, "A-1 must nest inside A: {xml}");
         assert!(a_close < b, "B must follow A's close: {xml}");
-        // 開き/閉じの数が釣り合う。
+        // The number of opening and closing tags balances out.
         assert_eq!(
             xml.matches("<item ").count(),
             xml.matches("</item>").count()
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn a_level_jump_counts_as_one_nesting_step() {
-        // h1 -> h3 の飛びも1段だけ深くし、タグの釣り合いは崩さない。
+        // An h1 -> h3 jump nests just one level deeper, keeping the tags balanced.
         let xml = build_outline_xml(&[heading(1, "A", 1), heading(3, "A-x", 2)]);
         assert_eq!(xml.matches("<item ").count(), 2);
         assert_eq!(

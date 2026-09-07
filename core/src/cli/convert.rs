@@ -160,9 +160,9 @@ fn render_from_reader<S: Sink<Error = io::Error>>(
         back_links,
     };
 
-    // `--dump-outline`: 見出し一覧のXMLを指定ファイルへ書き出す関数を組む。
-    // 書き出しはエンジンのページ確定後(コールバック内)に起きるため、失敗は
-    // 共有セルへ退避し、`engine.finish()`の後で拾ってエラーにする。
+    // `--dump-outline`: build the function that writes the heading-list XML to the given file.
+    // The write happens after the engine has finalized its pages (inside the callback), so any
+    // failure is stashed in a shared cell and picked up after `engine.finish()` to raise an error.
     let outline_error: Rc<RefCell<Option<io::Error>>> = Rc::new(RefCell::new(None));
     let outline_sink: Option<OutlineSink> = args.dump_outline.clone().map(|path| {
         let error = Rc::clone(&outline_error);
@@ -247,9 +247,9 @@ fn render_from_reader<S: Sink<Error = io::Error>>(
 
     let result = engine.finish().map_err(engine_error);
 
-    // `--dump-outline`の書き出しはコールバック内(finishの最中)で起きるため、
-    // ここで失敗を拾う。PDF自体は書けていても、要求されたXMLが書けなければ
-    // 失敗として扱う。
+    // The `--dump-outline` write happens inside the callback (during finish), so we pick up
+    // any failure here. Even if the PDF itself was written, failing to write the requested XML
+    // is treated as a failure.
     if let Some(e) = outline_error.borrow_mut().take() {
         return Err(CliError::Input(format!(
             "アウトラインの書き出しに失敗しました: {e}"

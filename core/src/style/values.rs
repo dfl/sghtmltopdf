@@ -622,27 +622,28 @@ pub enum SpecifiedLength {
     Px(f32),
     Em(f32),
     Rem(f32),
-    /// `vw`。ビューポート(印刷ではページboxそのもの)幅の1%。
+    /// `vw`. 1% of the viewport (the page box itself, in print) width.
     Vw(f32),
-    /// `vh`。ビューポート高さの1%。
+    /// `vh`. 1% of the viewport height.
     Vh(f32),
-    /// `vmin`。ビューポートの短辺の1%。
+    /// `vmin`. 1% of the shorter side of the viewport.
     Vmin(f32),
-    /// `vmax`。ビューポートの長辺の1%。
+    /// `vmax`. 1% of the longer side of the viewport.
     Vmax(f32),
 }
 
-/// ビューポート単位(`vw`/`vh`/`vmin`/`vmax`)の基準となるページboxの寸法(px)。
+/// The page box dimensions (px) that viewport units (`vw`/`vh`/`vmin`/`vmax`) are relative to.
 ///
-/// 印刷にはブラウザのようなビューポートが無いため、ページbox(用紙サイズ)を
-/// ビューポートとみなす。全プロパティの長さ解決(`resolve`)へ寸法を引き回すと
-/// 数百箇所の署名変更になるため、文書全体で1つの値をスレッドローカルに置き、
-/// エンジンがスタイル計算の前に[`set_viewport_px`]で設定する。既定はA4(96dpi)
-/// なので、設定し忘れても妥当な値にはなる(実描画では必ず設定される)。
+/// Print has no browser-like viewport, so the page box (paper size) is treated as the viewport.
+/// Threading the dimensions through the length resolution (`resolve`) of every property would
+/// mean changing hundreds of signatures, so a single value for the whole document is kept in a
+/// thread-local, which the engine sets with [`set_viewport_px`] before style computation. The
+/// default is A4 (96dpi), so even if setting it is forgotten the value is still reasonable (in
+/// real rendering it is always set).
 mod viewport {
     use std::cell::Cell;
 
-    // A4 = 210mm × 297mm を 96dpi で px 換算した既定値。
+    // The default value: A4 = 210mm × 297mm converted to px at 96dpi.
     const DEFAULT: (f32, f32) = (793.7008, 1122.5197);
 
     thread_local! {
@@ -658,9 +659,9 @@ mod viewport {
     }
 }
 
-/// ビューポート単位の基準となるページboxの寸法(px)を設定する。エンジンが
-/// スタイル計算の直前に呼ぶ。表紙・目次など同じページサイズの独立ドキュメントも
-/// 同じスレッドで処理されるため、1回の設定で足りる。
+/// Set the page box dimensions (px) that viewport units are relative to. The engine calls this
+/// just before style computation. Independent documents with the same page size, such as the
+/// cover and TOC, are processed on the same thread, so a single set is enough.
 pub fn set_viewport_px(width: f32, height: f32) {
     viewport::set(width, height);
 }
@@ -1024,10 +1025,10 @@ pub enum BackgroundAttachment {
     Fixed,
 }
 
-/// `background-clip`。`text`のみ特別扱いし、`border-box`/`padding-box`/
-/// `content-box`はいずれも既定(border-box基準の描画)へ寄せる。`text`は背景を
-/// 要素のテキストのグリフでクリップする(`linear-gradient`と併用したときだけ
-/// 効果があり、グラデーション文字を作る)。
+/// `background-clip`. Only `text` is treated specially; `border-box`/`padding-box`/
+/// `content-box` all fall back to the default (border-box-based rendering). `text` clips the
+/// background to the element's text glyphs (only has an effect when combined with
+/// `linear-gradient`, making gradient text).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BackgroundClip {
     #[default]
@@ -1048,36 +1049,37 @@ pub enum Color {
     },
 }
 
-/// `linear-gradient()`の指定値。角度はCSSの慣習(`0deg`=上向き、時計回りに
-/// 増加)で度のまま保持する。色は`currentcolor`未解決のまま(解決は計算
-/// スタイルの役割)。`radial-gradient`など未対応の層はここには入らない
-/// (パース側で読み飛ばす)。
+/// The specified value of `linear-gradient()`. The angle is kept in degrees following the CSS
+/// convention (`0deg`=up, increasing clockwise). Colors are left with `currentcolor` unresolved
+/// (resolution is the computed style's job). Unsupported layers such as `radial-gradient` do not
+/// appear here (skipped by the parser).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpecifiedLinearGradient {
     pub angle_deg: f32,
     pub stops: Vec<SpecifiedColorStop>,
 }
 
-/// `linear-gradient()`の色経由点1つ。位置は省略可(`None`はパース後に
-/// 前後の点から等間隔で補完する)。位置は0..1の分数(パーセンテージ)。
+/// A single `linear-gradient()` color stop. The position may be omitted (`None` is filled in
+/// evenly from the neighboring stops after parsing). The position is a 0..1 fraction (a percentage).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpecifiedColorStop {
     pub color: Color,
     pub position: Option<f32>,
 }
 
-/// `radial-gradient()`の指定値。中心位置は0..1の分数`(x, y)`(既定は中央
-/// `(0.5, 0.5)`)。形状・サイズはv1では`circle`/`farthest-corner`固定として扱い
-/// (キーワードはパースするが半径計算は常にfarthest-corner)、色は`currentcolor`
-/// 未解決のまま(解決は計算スタイルの役割)。
+/// The specified value of `radial-gradient()`. The center position is a 0..1 fraction `(x, y)`
+/// (defaulting to the center `(0.5, 0.5)`). Shape and size are treated in v1 as fixed
+/// `circle`/`farthest-corner` (keywords are parsed but the radius is always computed as
+/// farthest-corner), and colors are left with `currentcolor` unresolved (resolution is the
+/// computed style's job).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpecifiedRadialGradient {
     pub center: (f32, f32),
     pub stops: Vec<SpecifiedColorStop>,
 }
 
-/// `background-image`/`background`の1層の勾配指定値。描画順(手前→奥のCSS順)を
-/// 保つため、`linear`/`radial`を同じ列に混在させて持つ。
+/// The gradient specified value for one layer of `background-image`/`background`. To preserve
+/// the draw order (CSS order, front to back), `linear`/`radial` are held mixed in the same list.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SpecifiedBackgroundGradient {
     Linear(SpecifiedLinearGradient),

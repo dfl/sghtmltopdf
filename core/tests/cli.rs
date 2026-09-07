@@ -1585,7 +1585,7 @@ fn dump_outline_writes_a_wkhtmltopdf_compatible_xml_file() {
         xml.contains(r#"<outline xmlns="http://code.google.com/p/wkhtmltopdf/outline">"#),
         "outline uses the wkhtmltopdf namespace: {xml}"
     );
-    // sample.html の唯一の見出し(h1)が1ページ目の項目として載る。
+    // sample.html's only heading (h1) appears as an item on page 1.
     assert!(
         xml.contains(r#"<item title="Sample Report" page="1""#),
         "the h1 heading should be reported on page 1: {xml}"

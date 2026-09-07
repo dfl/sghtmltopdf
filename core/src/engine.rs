@@ -172,9 +172,9 @@ pub struct EngineOptions {
     pub toc: TocSettings,
     /// `--page-offset`。TOC・本文のページ番号の起点をずらす。
     pub page_offset: usize,
-    /// `--dump-outline`。設定すると、見出し一覧を最終ページ番号付きで
-    /// この関数へ渡す(XMLの組み立て・ファイルへの書き出しはCLI層が持つ)。
-    /// `--toc`と独立に見出しを収集させる。
+    /// `--dump-outline`. When set, the list of headings is passed to this function with
+    /// their final page numbers (the CLI layer owns assembling the XML and writing the file).
+    /// Makes headings be collected independently of `--toc`.
     pub outline: Option<OutlineSink>,
     /// CLIのヘッダー/フッター簡易オプションから合成した`@page`ルール。著者
     /// CSSのページルールより前に置かれるため、同じmargin boxを著者が
@@ -416,22 +416,22 @@ impl std::fmt::Debug for TocSettings {
     }
 }
 
-/// 収集した見出しを`--dump-outline`の出力へ渡す関数(CLI層(`cli::outline`)が
-/// XMLの組み立て・書き出しを実装して渡す)。
+/// A function that receives the collected headings for the `--dump-outline` output (the CLI
+/// layer (`cli::outline`) implements the XML assembly and writing and supplies it).
 pub type OutlineSink = Rc<dyn Fn(&[OutlineHeading])>;
 
-/// アウトライン(`--dump-outline`)の見出し1件。[`TocHeading`]に、cover・TOCを
-/// 数えた最終的な1始まりの物理ページ番号を付けたもの。wkhtmltopdfの
-/// `--dump-outline`が吐く`<item page="...">`と同じ意味の番号。
+/// A single heading for the outline (`--dump-outline`). A [`TocHeading`] with the final
+/// 1-based physical page number, counting the cover and TOC, attached. The number means
+/// the same as the one wkhtmltopdf's `--dump-outline` emits in `<item page="...">`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutlineHeading {
-    /// `h1`=1 … `h6`=6。
+    /// `h1`=1 … `h6`=6.
     pub level: u8,
     pub title: String,
-    /// 1始まりの物理ページ番号。文書の先頭(coverがあればその1枚目)から
-    /// 数えた通し番号で、`--page-offset`の影響は受けない。
+    /// 1-based physical page number. A running count from the start of the document
+    /// (the first cover page, if any); unaffected by `--page-offset`.
     pub page: usize,
-    /// リンク先の名前付き宛先。
+    /// The named destination that is linked to.
     pub anchor: String,
 }
 
@@ -1055,8 +1055,8 @@ impl<S: Sink> Engine<S> {
         };
         let page_rules = page_rules_with_cli(&self.options.extra_page_rules, &author.page_rules);
         let page_settings = apply_page_rule_settings_override(self.options.settings, &page_rules);
-        // ビューポート単位(vw/vh)はページboxを基準に解決する。以降のスタイル
-        // 計算(compute_styles_with_parent)の前に設定する。
+        // Viewport units (vw/vh) resolve against the page box. Set it before the
+        // subsequent style computation (compute_styles_with_parent).
         set_viewport_px(page_settings.size.width, page_settings.size.height);
         if rules_use_page_count(&page_rules) {
             return Err(EngineError::UnsupportedInStreamingMode(
@@ -1081,7 +1081,8 @@ impl<S: Sink> Engine<S> {
                  これを使う場合は --streaming を外してください",
             ));
         }
-        // アウトラインも見出しの最終ページ番号が要るため、目次と同じ制約。
+        // The outline also needs the final page number of each heading, so it has the
+        // same constraint as the table of contents.
         if self.options.outline.is_some() {
             return Err(EngineError::UnsupportedInStreamingMode(
                 "--dump-outline はストリーミングモードでは使えません\n  \
@@ -1506,9 +1507,9 @@ impl<S: Sink> Engine<S> {
             );
         let css_cache = DocumentImageCache::new();
         let author = extract_author_stylesheet(&dom, &css_fetcher, &css_cache);
-        // ビューポート単位(vw/vh/vmin/vmax)はページboxを基準に解決するため、
-        // スタイル計算の前に最終的なページサイズを確定して設定する。表紙・目次
-        // など同じページサイズの独立ドキュメントも同じスレッドで処理される。
+        // Viewport units (vw/vh/vmin/vmax) resolve against the page box, so finalize and set
+        // the final page size before style computation. Independent documents with the same
+        // page size, such as the cover and TOC, are also processed on the same thread.
         let page_rules = page_rules_with_cli(&options.extra_page_rules, &author.page_rules);
         let page_settings = apply_page_rule_settings_override(options.settings, &page_rules);
         set_viewport_px(page_settings.size.width, page_settings.size.height);
@@ -1584,9 +1585,9 @@ impl<S: Sink> Engine<S> {
             &image_cache,
         );
 
-        // 目次・アウトライン用の見出し収集。`id`が無い見出しには
-        // 自動で宛先名を振り、`anchor_names`へ足す。`--dump-outline`は
-        // `--toc`と独立に見出しを必要とするため、どちらか一方でも収集する。
+        // Collect headings for the table of contents and the outline. Headings without an
+        // `id` are given an automatic destination name, added to `anchor_names`. Because
+        // `--dump-outline` needs headings independently of `--toc`, either one triggers collection.
         let headings = if options.toc.enabled || options.outline.is_some() {
             collect_headings(&dom, &pages, &mut anchor_names)
         } else {
@@ -1613,9 +1614,9 @@ impl<S: Sink> Engine<S> {
             (Vec::new(), HashMap::new())
         };
 
-        // `--dump-outline`: 見出しへ、cover・TOCを数えた最終的な1始まりの
-        // 物理ページ番号を付けて渡す。本文は cover → TOC の後に続くため、
-        // 本文内0始まりの`body_page`に先行ページ数と1を足す。
+        // `--dump-outline`: pass each heading with its final 1-based physical page number,
+        // counting the cover and TOC. Since the body follows cover -> TOC, add the number of
+        // leading pages and 1 to the 0-based `body_page` within the body.
         if let Some(dump) = &options.outline {
             let leading = cover_pages.len() + toc_pages.len();
             let entries: Vec<OutlineHeading> = headings
@@ -1894,9 +1895,8 @@ mod tests {
 
     #[test]
     fn dump_outline_reports_headings_with_final_page_numbers() {
-        // 2つ目の見出しを`break-before: always`で2ページ目へ送り、
-        // アウトラインがその最終ページ番号(1始まりの物理ページ)を
-        // 報告することを確かめる。
+        // Push the second heading onto page 2 with `break-before: always` and verify that
+        // the outline reports its final page number (the 1-based physical page).
         let captured: Rc<std::cell::RefCell<Vec<OutlineHeading>>> =
             Rc::new(std::cell::RefCell::new(Vec::new()));
         let target = Rc::clone(&captured);
@@ -1931,8 +1931,8 @@ mod tests {
 
     #[test]
     fn dump_outline_is_rejected_in_streaming_mode() {
-        // 見出しの最終ページ番号は1パスでは決まらないため、ストリーミング
-        // モードでは`--toc`と同じく拒否する。
+        // The final page number of a heading is not determined in a single pass, so it is
+        // rejected in streaming mode just like `--toc`.
         let options = EngineOptions {
             mode: Mode::Streaming,
             fonts: vec![font_spec()],
