@@ -670,6 +670,7 @@ impl SpecifiedLength {
     pub fn is_negative(self) -> bool {
         match self {
             Self::Px(v) | Self::Em(v) | Self::Rem(v) => v < 0.0,
+            Self::Vw(v) | Self::Vh(v) | Self::Vmin(v) | Self::Vmax(v) => v < 0.0,
         }
     }
 
